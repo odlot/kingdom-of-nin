@@ -13,6 +13,7 @@
 #include "ecs/system/movement_system.h"
 #include "events/events.h"
 #include "ui/floating_text_system.h"
+#include "ui/inventory.h"
 #include "ui/minimap.h"
 #include "world/generator.h"
 #include "world/region.h"
@@ -65,6 +66,25 @@ float squaredDistance(const Position& a, const Position& b) {
   return (dx * dx) + (dy * dy);
 }
 
+bool equipItemByIndex(InventoryComponent& inventory, EquipmentComponent& equipment,
+                      const ItemDatabase& database, std::size_t index) {
+  std::optional<ItemInstance> item = inventory.takeItemAt(index);
+  if (!item.has_value()) {
+    return false;
+  }
+  const ItemDef* def = database.getItem(item->itemId);
+  if (!def) {
+    inventory.addItem(*item);
+    return false;
+  }
+  if (equipment.equipped.count(def->slot) > 0) {
+    inventory.addItem(*item);
+    return false;
+  }
+  equipment.equipped[def->slot] = *item;
+  return true;
+}
+
 Game::Game() {
   auto logger = spdlog::get("console");
   if (!logger) {
@@ -91,6 +111,8 @@ Game::Game() {
   this->itemDatabase = std::make_unique<ItemDatabase>();
   this->eventBus = std::make_unique<EventBus>();
   this->floatingTextSystem = std::make_unique<FloatingTextSystem>(*this->eventBus);
+  this->inventoryUi = std::make_unique<Inventory>();
+  this->characterStats = std::make_unique<CharacterStats>();
   if (!TTF_Init()) {
     logger->error("SDL TTF could not initialize! SDL_Error: {}", SDL_GetError());
     throw std::runtime_error("SDL TTF Initialization failed");
@@ -137,8 +159,9 @@ Game::Game() {
     EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
     ItemInstance swordInstance{1};
-    inventory.items.push_back(swordInstance);
-    equipment.equipped[ItemSlot::Weapon] = swordInstance;
+    if (inventory.addItem(swordInstance)) {
+      equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+    }
   }
 
   { // Spawn a few mobs in each spawn region
@@ -239,6 +262,19 @@ void Game::update(float dt) {
   auto result = std::make_pair(x, y);
 
   const bool attackPressed = keyboardState[SDL_SCANCODE_SPACE];
+  float mouseX = 0.0f;
+  float mouseY = 0.0f;
+  const Uint32 mouseState = SDL_GetMouseState(&mouseX, &mouseY);
+  const bool mousePressed = (mouseState & SDL_BUTTON_LMASK) != 0;
+  {
+    InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    EquipmentComponent& equipment =
+        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    this->inventoryUi->handleInput(keyboardState, static_cast<int>(mouseX),
+                                   static_cast<int>(mouseY), mousePressed, inventory, equipment,
+                                   *this->itemDatabase);
+  }
   if (attackPressed && !this->wasAttackPressed && this->attackCooldownRemaining <= 0.0f) {
     const TransformComponent& playerTransform =
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
@@ -406,11 +442,35 @@ void Game::render() {
     SDL_DestroyTexture(texture);
   }
 
+  {
+    const InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    const EquipmentComponent& equipment =
+        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    this->inventoryUi->render(this->renderer, this->font, inventory, equipment,
+                              *this->itemDatabase);
+  }
+
   { // Minimap overlay
     const TransformComponent& playerTransform =
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
     this->minimap->render(this->renderer, *this->map, playerTransform.position, WINDOW_WIDTH,
                           WINDOW_HEIGHT);
+  }
+
+  { // Character stats overlay
+    const HealthComponent& health =
+        this->registry->getComponent<HealthComponent>(this->playerEntityId);
+    const ManaComponent& mana = this->registry->getComponent<ManaComponent>(this->playerEntityId);
+    const LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const StatsComponent& stats =
+        this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    const EquipmentComponent& equipment =
+        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
+    this->characterStats->render(this->renderer, this->font, WINDOW_WIDTH, health, mana, level,
+                                 attackPower, this->inventoryUi->isStatsVisible());
   }
 
   SDL_RenderPresent(this->renderer);
