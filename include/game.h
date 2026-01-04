@@ -11,7 +11,9 @@
 #include "ecs/registry.h"
 #include "events/event_bus.h"
 #include "items/item_database.h"
+#include "ui/character_stats.h"
 #include "ui/floating_text_system.h"
+#include "ui/inventory.h"
 #include "ui/minimap.h"
 #include "world/map.h"
 
@@ -33,6 +35,8 @@ private:
   SDL_Renderer* renderer = nullptr;
   TTF_Font* font = nullptr;
   std::unique_ptr<Camera> camera;
+  std::unique_ptr<Inventory> inventoryUi;
+  std::unique_ptr<CharacterStats> characterStats;
   std::unique_ptr<Minimap> minimap;
   std::unique_ptr<ItemDatabase> itemDatabase;
   std::unique_ptr<EventBus> eventBus;
