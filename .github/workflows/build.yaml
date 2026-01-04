@@ -20,6 +20,17 @@ jobs:
           build-essential \
           cmake \
           pkg-config \
+          libx11-dev \
+          libxext-dev \
+          libxrandr-dev \
+          libxcursor-dev \
+          libxfixes-dev \
+          libxi-dev \
+          libxss-dev \
+          libxxf86vm-dev \
+          libxkbcommon-dev \
+          libwayland-dev \
+          wayland-protocols \
           libopencv-dev \
           libfreetype6-dev \
           libharfbuzz-dev \
