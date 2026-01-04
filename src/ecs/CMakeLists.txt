@@ -1,0 +1,36 @@
+add_library(ecs)
+
+target_sources(ecs
+  PRIVATE
+    registry.cc
+    system/system.cc
+    system/graphic_system.cc
+    system/movement_system.cc
+
+  PUBLIC
+    FILE_SET ecsHeaders
+    TYPE HEADERS
+    BASE_DIRS
+      ${CMAKE_SOURCE_DIR}/include
+    FILES
+      ${CMAKE_SOURCE_DIR}/include/ecs/position.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/registry.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/system/system.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/system/movement_system.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/system/graphic_system.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/collision_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/health_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/inventory_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/level_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/mana_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/movement_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/equipment_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/stats_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/transform_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/graphic_component.h
+)
+
+target_include_directories(ecs PUBLIC ${CMAKE_SOURCE_DIR}/include)
+
+target_link_libraries(ecs PRIVATE SDL3::SDL3 spdlog::spdlog items)

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+
+FORMAT_FILES="$(
+  git diff --cached --name-only --diff-filter=ACMR \
+    | rg -e '\.(cc|h|hpp)$' || true
+)"
+
+if [[ -n "${FORMAT_FILES}" ]]; then
+  printf '%s\n' "${FORMAT_FILES}" | xargs clang-format -i
+  printf '%s\n' "${FORMAT_FILES}" | xargs git add
+fi
+
+"${ROOT_DIR}/scripts/check-build.sh"
