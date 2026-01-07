@@ -37,6 +37,7 @@ void Map::print() {
   cv::Scalar dungeonColor(200, 90, 40);
   cv::Scalar startZoneOverlay(255, 240, 120);
   cv::Scalar spawnOverlay(80, 140, 220);
+  cv::Scalar goblinOverlay(80, 200, 120);
   cv::Scalar dungeonOverlay(255, 120, 60);
   cv::Mat mapImage(height, width, CV_8UC3, cv::Scalar(0, 0, 0));
   for (const auto& tile : tiles) {
@@ -66,6 +67,9 @@ void Map::print() {
           break;
         case RegionType::SpawnRegion:
           color = spawnOverlay;
+          break;
+        case RegionType::GoblinCamp:
+          color = goblinOverlay;
           break;
         case RegionType::DungeonEntrance:
           color = dungeonOverlay;

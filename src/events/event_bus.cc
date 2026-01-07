@@ -8,6 +8,10 @@ void EventBus::emitFloatingTextEvent(const FloatingTextEvent& event) {
   floatingTextEvents.push_back(event);
 }
 
+void EventBus::emitRegionEvent(const RegionEvent& event) {
+  regionEvents.push_back(event);
+}
+
 std::vector<DamageEvent> EventBus::consumeDamageEvents() {
   std::vector<DamageEvent> events = std::move(damageEvents);
   damageEvents.clear();
@@ -17,5 +21,11 @@ std::vector<DamageEvent> EventBus::consumeDamageEvents() {
 std::vector<FloatingTextEvent> EventBus::consumeFloatingTextEvents() {
   std::vector<FloatingTextEvent> events = std::move(floatingTextEvents);
   floatingTextEvents.clear();
+  return events;
+}
+
+std::vector<RegionEvent> EventBus::consumeRegionEvents() {
+  std::vector<RegionEvent> events = std::move(regionEvents);
+  regionEvents.clear();
   return events;
 }

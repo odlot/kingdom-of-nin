@@ -1,6 +1,11 @@
 #pragma once
 
-enum class RegionType { StartingZone = 0, DungeonEntrance, SpawnRegion };
+enum class RegionType {
+  StartingZone = 0,
+  DungeonEntrance,
+  SpawnRegion,
+  GoblinCamp
+};
 
 struct Region {
   Region(RegionType type, int x, int y, int width, int height)

@@ -5,7 +5,9 @@
 #include "ecs/component/health_component.h"
 #include "ecs/component/inventory_component.h"
 #include "ecs/component/level_component.h"
+#include "ecs/component/loot_component.h"
 #include "ecs/component/mana_component.h"
+#include "ecs/component/mob_component.h"
 #include "ecs/component/movement_component.h"
 #include "ecs/component/stats_component.h"
 #include "ecs/component/transform_component.h"
@@ -21,6 +23,7 @@
 #include <SDL3/SDL_keyboard.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <optional>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -33,6 +36,7 @@ constexpr int MINIMAP_HEIGHT = 120;
 constexpr int MINIMAP_MARGIN = 12;
 constexpr float ATTACK_RANGE = 56.0f;
 constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
+constexpr float LOOT_PICKUP_RANGE = 40.0f;
 
 namespace {
 std::optional<Coordinate> firstWalkableInRegion(const Map& map, const Region& region) {
@@ -45,11 +49,54 @@ std::optional<Coordinate> firstWalkableInRegion(const Map& map, const Region& re
   }
   return std::nullopt;
 }
+
+std::string regionName(RegionType type) {
+  switch (type) {
+  case RegionType::StartingZone:
+    return "Starting Zone";
+  case RegionType::SpawnRegion:
+    return "Spawn Region";
+  case RegionType::GoblinCamp:
+    return "Goblin Camp";
+  case RegionType::DungeonEntrance:
+    return "Dungeon Entrance";
+  }
+  return "Region";
+}
+
+int regionIndexAt(const Map& map, int tileX, int tileY) {
+  const std::vector<Region>& regions = map.getRegions();
+  for (std::size_t i = 0; i < regions.size(); ++i) {
+    if (regions[i].contains(tileX, tileY)) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+void drawCircle(SDL_Renderer* renderer, const Position& center, float radius,
+                const Position& cameraPosition, SDL_Color color) {
+  constexpr int kSegments = 32;
+  SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+  float prevX = center.x + radius;
+  float prevY = center.y;
+  constexpr float kPi = 3.14159265f;
+  for (int i = 1; i <= kSegments; ++i) {
+    const float angle = static_cast<float>(i) * (2.0f * kPi) / static_cast<float>(kSegments);
+    const float nextX = center.x + radius * std::cos(angle);
+    const float nextY = center.y + radius * std::sin(angle);
+    SDL_RenderLine(renderer, prevX - cameraPosition.x, prevY - cameraPosition.y,
+                   nextX - cameraPosition.x, nextY - cameraPosition.y);
+    prevX = nextX;
+    prevY = nextY;
+  }
+}
+
 } // namespace
 
 int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& equipment,
                        const ItemDatabase& database) {
-  int total = stats.baseAttackPower;
+  int total = stats.baseAttackPower + stats.strength;
   for (const auto& entry : equipment.equipped) {
     const ItemDef* def = database.getItem(entry.second.itemId);
     if (!def) {
@@ -66,6 +113,15 @@ float squaredDistance(const Position& a, const Position& b) {
   return (dx * dx) + (dy * dy);
 }
 
+void applyLevelUps(LevelComponent& level, StatsComponent& stats) {
+  while (level.experience >= level.nextLevelExperience) {
+    level.experience -= level.nextLevelExperience;
+    level.level += 1;
+    level.nextLevelExperience += 100;
+    stats.unspentPoints += 5;
+  }
+}
+
 bool equipItemByIndex(InventoryComponent& inventory, EquipmentComponent& equipment,
                       const ItemDatabase& database, std::size_t index) {
   std::optional<ItemInstance> item = inventory.takeItemAt(index);
@@ -77,12 +133,75 @@ bool equipItemByIndex(InventoryComponent& inventory, EquipmentComponent& equipme
     inventory.addItem(*item);
     return false;
   }
-  if (equipment.equipped.count(def->slot) > 0) {
-    inventory.addItem(*item);
-    return false;
+
+  auto equippedIt = equipment.equipped.find(def->slot);
+  if (equippedIt != equipment.equipped.end()) {
+    if (!inventory.addItem(equippedIt->second)) {
+      inventory.addItem(*item);
+      return false;
+    }
+    equipment.equipped.erase(equippedIt);
   }
+
   equipment.equipped[def->slot] = *item;
   return true;
+}
+
+Position centerForEntity(const TransformComponent& transform, const CollisionComponent& collision) {
+  return Position(transform.position.x + (collision.width / 2.0f),
+                  transform.position.y + (collision.height / 2.0f));
+}
+
+bool createLootEntity(Registry& registry, const Position& position, int itemId,
+                      std::vector<int>& lootEntityIds) {
+  int entityId = registry.createEntity();
+  registry.registerComponentForEntity<TransformComponent>(
+      std::make_unique<TransformComponent>(position), entityId);
+  registry.registerComponentForEntity<GraphicComponent>(
+      std::make_unique<GraphicComponent>(position, SDL_Color({230, 210, 80, 255})), entityId);
+  registry.registerComponentForEntity<CollisionComponent>(
+      std::make_unique<CollisionComponent>(32.0f, 32.0f, false), entityId);
+  registry.registerComponentForEntity<LootComponent>(std::make_unique<LootComponent>(itemId),
+                                                     entityId);
+  lootEntityIds.push_back(entityId);
+  return true;
+}
+
+bool isBlockedByMap(const Map& map, const CollisionComponent& collision, float nextX, float nextY) {
+  const float left = nextX;
+  const float right = nextX + collision.width - 1.0f;
+  const float top = nextY;
+  const float bottom = nextY + collision.height - 1.0f;
+
+  const int tileLeft = static_cast<int>(left / TILE_SIZE);
+  const int tileRight = static_cast<int>(right / TILE_SIZE);
+  const int tileTop = static_cast<int>(top / TILE_SIZE);
+  const int tileBottom = static_cast<int>(bottom / TILE_SIZE);
+
+  return !map.isWalkable(tileLeft, tileTop) || !map.isWalkable(tileRight, tileTop) ||
+         !map.isWalkable(tileLeft, tileBottom) || !map.isWalkable(tileRight, tileBottom);
+}
+
+void moveEntityToward(const Map& map, TransformComponent& transform,
+                      const CollisionComponent& collision, float speed, const Position& target,
+                      float dt) {
+  float dx = target.x - transform.position.x;
+  float dy = target.y - transform.position.y;
+  const float length = std::sqrt((dx * dx) + (dy * dy));
+  if (length <= 0.001f) {
+    return;
+  }
+  dx /= length;
+  dy /= length;
+  const float newX = transform.position.x + (dx * speed * dt);
+  const float newY = transform.position.y + (dy * speed * dt);
+
+  if (!isBlockedByMap(map, collision, newX, transform.position.y)) {
+    transform.position.x = newX;
+  }
+  if (!isBlockedByMap(map, collision, transform.position.x, newY)) {
+    transform.position.y = newY;
+  }
 }
 
 Game::Game() {
@@ -111,6 +230,7 @@ Game::Game() {
   this->itemDatabase = std::make_unique<ItemDatabase>();
   this->eventBus = std::make_unique<EventBus>();
   this->floatingTextSystem = std::make_unique<FloatingTextSystem>(*this->eventBus);
+  this->respawnSystem = std::make_unique<RespawnSystem>();
   this->inventoryUi = std::make_unique<Inventory>();
   this->characterStats = std::make_unique<CharacterStats>();
   if (!TTF_Init()) {
@@ -164,50 +284,26 @@ Game::Game() {
     }
   }
 
-  { // Spawn a few mobs in each spawn region
-    const SDL_Color mobColor = {200, 40, 40, 255};
-    for (const Region& region : this->map->getRegions()) {
-      if (region.type != RegionType::SpawnRegion) {
+  { // Spawn loot items near the starting zone
+    const std::array<int, 4> lootItems = {1, 2, 3, 4};
+    const std::array<std::pair<int, int>, 6> offsets = {
+        std::make_pair(-2, 0), std::make_pair(2, 0),   std::make_pair(0, -2),
+        std::make_pair(0, 2),  std::make_pair(-3, -1), std::make_pair(3, 1)};
+    int lootIndex = 0;
+    for (const auto& offset : offsets) {
+      int tileX = start.x + offset.first;
+      int tileY = start.y + offset.second;
+      if (!this->map->isWalkable(tileX, tileY)) {
         continue;
       }
-      const std::array<Coordinate, 3> candidates = {
-          Coordinate(region.x + 2, region.y + 2),
-          Coordinate(region.x + region.width - 3, region.y + 2),
-          Coordinate(region.x + 2, region.y + region.height - 3)};
-      int spawned = 0;
-      for (const Coordinate& tile : candidates) {
-        if (!region.contains(tile.x, tile.y)) {
-          continue;
-        }
-        if (!this->map->isWalkable(tile.x, tile.y)) {
-          continue;
-        }
-        Position mobPosition(tile.x * TILE_SIZE, tile.y * TILE_SIZE);
-        int mobEntityId = this->registry->createEntity();
-        this->registry->registerComponentForEntity<TransformComponent>(
-            std::make_unique<TransformComponent>(mobPosition), mobEntityId);
-        this->registry->registerComponentForEntity<GraphicComponent>(
-            std::make_unique<GraphicComponent>(mobPosition, mobColor), mobEntityId);
-        this->registry->registerComponentForEntity<HealthComponent>(
-            std::make_unique<HealthComponent>(20, 20), mobEntityId);
-        this->mobEntityIds.push_back(mobEntityId);
-        ++spawned;
-      }
-      if (spawned == 0) {
-        std::optional<Coordinate> fallback = firstWalkableInRegion(*this->map, region);
-        if (fallback.has_value()) {
-          Position mobPosition(fallback->x * TILE_SIZE, fallback->y * TILE_SIZE);
-          int mobEntityId = this->registry->createEntity();
-          this->registry->registerComponentForEntity<TransformComponent>(
-              std::make_unique<TransformComponent>(mobPosition), mobEntityId);
-          this->registry->registerComponentForEntity<GraphicComponent>(
-              std::make_unique<GraphicComponent>(mobPosition, mobColor), mobEntityId);
-          this->registry->registerComponentForEntity<HealthComponent>(
-              std::make_unique<HealthComponent>(20, 20), mobEntityId);
-          this->mobEntityIds.push_back(mobEntityId);
-        }
-      }
+      Position lootPosition(tileX * TILE_SIZE, tileY * TILE_SIZE);
+      createLootEntity(*this->registry, lootPosition, lootItems[lootIndex], this->lootEntityIds);
+      lootIndex = (lootIndex + 1) % static_cast<int>(lootItems.size());
     }
+  }
+
+  { // Spawn goblins inside spawn regions
+    this->respawnSystem->initialize(*this->map, *this->registry, this->mobEntityIds);
   }
 
   const float worldWidth = static_cast<float>(this->map->getWidth() * TILE_SIZE);
@@ -243,6 +339,7 @@ void Game::update(float dt) {
     this->attackCooldownRemaining = std::max(0.0f, this->attackCooldownRemaining - dt);
   }
   this->floatingTextSystem->update(dt);
+  this->respawnSystem->update(dt, *this->map, *this->registry, this->mobEntityIds);
 
   int x = 0;
   int y = 0;
@@ -262,6 +359,8 @@ void Game::update(float dt) {
   auto result = std::make_pair(x, y);
 
   const bool attackPressed = keyboardState[SDL_SCANCODE_SPACE];
+  const bool pickupPressed = keyboardState[SDL_SCANCODE_F];
+  const bool debugPressed = keyboardState[SDL_SCANCODE_D];
   float mouseX = 0.0f;
   float mouseY = 0.0f;
   const Uint32 mouseState = SDL_GetMouseState(&mouseX, &mouseY);
@@ -275,6 +374,64 @@ void Game::update(float dt) {
                                    static_cast<int>(mouseY), mousePressed, inventory, equipment,
                                    *this->itemDatabase);
   }
+  {
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    this->characterStats->handleInput(static_cast<int>(mouseX), static_cast<int>(mouseY),
+                                      mousePressed, stats, this->inventoryUi->isStatsVisible());
+  }
+
+  {
+    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    applyLevelUps(level, stats);
+  }
+  if (pickupPressed && !this->wasPickupPressed) {
+    InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
+
+    int closestLootId = -1;
+    float closestDist = pickupRangeSquared;
+    for (int lootId : this->lootEntityIds) {
+      const TransformComponent& lootTransform =
+          this->registry->getComponent<TransformComponent>(lootId);
+      const Position lootCenter(lootTransform.position.x + (TILE_SIZE / 2.0f),
+                                lootTransform.position.y + (TILE_SIZE / 2.0f));
+      const float dist = squaredDistance(playerCenter, lootCenter);
+      if (dist <= closestDist) {
+        closestDist = dist;
+        closestLootId = lootId;
+      }
+    }
+
+    if (closestLootId != -1) {
+      LootComponent& loot = this->registry->getComponent<LootComponent>(closestLootId);
+      ItemInstance item{loot.itemId};
+      if (inventory.addItem(item)) {
+        const ItemDef* def = this->itemDatabase->getItem(item.itemId);
+        std::string name = def ? def->name : "Item";
+        this->eventBus->emitFloatingTextEvent(FloatingTextEvent{"Picked up " + name, playerCenter});
+        GraphicComponent& graphic = this->registry->getComponent<GraphicComponent>(closestLootId);
+        graphic.color = SDL_Color({0, 0, 0, 0});
+        TransformComponent& transform =
+            this->registry->getComponent<TransformComponent>(closestLootId);
+        transform.position = Position(-1000.0f, -1000.0f);
+        this->lootEntityIds.erase(
+            std::remove(this->lootEntityIds.begin(), this->lootEntityIds.end(), closestLootId),
+            this->lootEntityIds.end());
+      }
+    }
+  }
+  this->wasPickupPressed = pickupPressed;
+  if (debugPressed && !this->wasDebugPressed) {
+    this->showDebugMobRanges = !this->showDebugMobRanges;
+  }
+  this->wasDebugPressed = debugPressed;
   if (attackPressed && !this->wasAttackPressed && this->attackCooldownRemaining <= 0.0f) {
     const TransformComponent& playerTransform =
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
@@ -293,6 +450,9 @@ void Game::update(float dt) {
     for (int mobEntityId : this->mobEntityIds) {
       HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
       if (mobHealth.current <= 0) {
+        continue;
+      }
+      if (this->respawnSystem->isSpawning(mobEntityId)) {
         continue;
       }
       const TransformComponent& mobTransform =
@@ -328,12 +488,74 @@ void Game::update(float dt) {
     }
   }
 
+  {
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    const int playerTileX = static_cast<int>(playerCenter.x / TILE_SIZE);
+    const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
+
+    for (int mobEntityId : this->mobEntityIds) {
+      const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
+      if (mobHealth.current <= 0) {
+        continue;
+      }
+      if (this->respawnSystem->isSpawning(mobEntityId)) {
+        continue;
+      }
+      TransformComponent& mobTransform =
+          this->registry->getComponent<TransformComponent>(mobEntityId);
+      const CollisionComponent& mobCollision =
+          this->registry->getComponent<CollisionComponent>(mobEntityId);
+      MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+      const Position mobCenter = centerForEntity(mobTransform, mobCollision);
+      const bool playerInRegion =
+          playerTileX >= mob.regionX && playerTileX < mob.regionX + mob.regionWidth &&
+          playerTileY >= mob.regionY && playerTileY < mob.regionY + mob.regionHeight;
+      const float distToPlayer = squaredDistance(mobCenter, playerCenter);
+
+      const Position homePosition(mob.homeX * TILE_SIZE, mob.homeY * TILE_SIZE);
+      const Position homeCenter(homePosition.x + (mobCollision.width / 2.0f),
+                                homePosition.y + (mobCollision.height / 2.0f));
+      const float distToHome = squaredDistance(mobCenter, homeCenter);
+
+      std::optional<Position> target;
+      if (playerInRegion && distToPlayer <= (mob.aggroRange * mob.aggroRange)) {
+        target = playerTransform.position;
+      } else if (distToHome > 4.0f) {
+        target = homePosition;
+      }
+
+      if (target.has_value()) {
+        moveEntityToward(*this->map, mobTransform, mobCollision, mob.speed, *target, dt);
+      }
+    }
+  }
+
   const TransformComponent& playerTransform =
       this->registry->getComponent<TransformComponent>(this->playerEntityId);
   const CollisionComponent& playerCollision =
       this->registry->getComponent<CollisionComponent>(this->playerEntityId);
   Position playerCenter(playerTransform.position.x + (playerCollision.width / 2.0f),
                         playerTransform.position.y + (playerCollision.height / 2.0f));
+  const int playerTileX = static_cast<int>(playerCenter.x / TILE_SIZE);
+  const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
+  const int currentRegionIndex = regionIndexAt(*this->map, playerTileX, playerTileY);
+  if (currentRegionIndex != this->lastRegionIndex) {
+    if (this->lastRegionIndex >= 0) {
+      const Region& previousRegion = this->map->getRegions()[this->lastRegionIndex];
+      this->eventBus->emitRegionEvent(
+          RegionEvent{RegionTransition::Leave, regionName(previousRegion.type), playerCenter});
+    }
+    if (currentRegionIndex >= 0) {
+      const Region& currentRegion = this->map->getRegions()[currentRegionIndex];
+      this->eventBus->emitRegionEvent(
+          RegionEvent{RegionTransition::Enter, regionName(currentRegion.type), playerCenter});
+    }
+    this->lastRegionIndex = currentRegionIndex;
+  }
   this->camera->update(playerCenter);
 }
 
@@ -412,6 +634,25 @@ void Game::render() {
     this->floatingTextSystem->render(this->renderer, cameraPosition, this->font);
   }
 
+  if (this->showDebugMobRanges) {
+    for (int mobEntityId : this->mobEntityIds) {
+      const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
+      if (mobHealth.current <= 0) {
+        continue;
+      }
+      const TransformComponent& mobTransform =
+          this->registry->getComponent<TransformComponent>(mobEntityId);
+      const CollisionComponent& mobCollision =
+          this->registry->getComponent<CollisionComponent>(mobEntityId);
+      const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+      const Position mobCenter = centerForEntity(mobTransform, mobCollision);
+      drawCircle(this->renderer, mobCenter, mob.aggroRange, cameraPosition,
+                 SDL_Color{240, 60, 60, 180});
+      drawCircle(this->renderer, mobCenter, mob.leashRange, cameraPosition,
+                 SDL_Color{60, 120, 240, 180});
+    }
+  }
+
   { // HUD: Render basic player stats
     const HealthComponent& health =
         this->registry->getComponent<HealthComponent>(this->playerEntityId);
@@ -470,7 +711,9 @@ void Game::render() {
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
     const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
     this->characterStats->render(this->renderer, this->font, WINDOW_WIDTH, health, mana, level,
-                                 attackPower, this->inventoryUi->isStatsVisible());
+                                 attackPower, stats.strength, stats.dexterity, stats.intellect,
+                                 stats.luck, stats.unspentPoints,
+                                 this->inventoryUi->isStatsVisible());
   }
 
   SDL_RenderPresent(this->renderer);

@@ -16,6 +16,7 @@ std::unique_ptr<Map> Generator::generate() {
   regions.emplace_back(RegionType::SpawnRegion, 12, 12, 18, 18);
   regions.emplace_back(RegionType::SpawnRegion, 90, 20, 22, 18);
   regions.emplace_back(RegionType::SpawnRegion, 24, 88, 20, 24);
+  regions.emplace_back(RegionType::GoblinCamp, 72, 72, 18, 18);
   regions.emplace_back(RegionType::DungeonEntrance, 20, 64, 1, 1);
   regions.emplace_back(RegionType::DungeonEntrance, 64, 20, 1, 1);
   regions.emplace_back(RegionType::DungeonEntrance, 108, 96, 1, 1);

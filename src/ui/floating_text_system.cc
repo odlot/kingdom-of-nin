@@ -23,6 +23,12 @@ void FloatingTextSystem::update(float dt) {
   for (const FloatingTextEvent& event : eventBus.consumeFloatingTextEvents()) {
     floatingTexts.push_back(FloatingText{event.text, event.position, FLOATING_TEXT_LIFETIME});
   }
+
+  for (const RegionEvent& event : eventBus.consumeRegionEvents()) {
+    const char* action = event.transition == RegionTransition::Enter ? "Entered " : "Left ";
+    floatingTexts.push_back(FloatingText{std::string(action) + event.regionName, event.position,
+                                         FLOATING_TEXT_LIFETIME});
+  }
 }
 
 void FloatingTextSystem::render(SDL_Renderer* renderer, const Position& cameraPosition,

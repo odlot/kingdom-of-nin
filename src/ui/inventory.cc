@@ -142,11 +142,20 @@ void Inventory::handleInput(const bool* keyboardState, int mouseX, int mouseY, b
     if (index.has_value() && *index < inventory.items.size()) {
       const ItemInstance item = inventory.items[*index];
       const ItemDef* def = database.getItem(item.itemId);
-      if (def && equipment.equipped.count(def->slot) == 0) {
+      if (def) {
         std::optional<ItemInstance> removed = inventory.takeItemAt(*index);
-        if (removed.has_value()) {
-          equipment.equipped[def->slot] = *removed;
+        if (!removed.has_value()) {
+          return;
         }
+        auto equippedIt = equipment.equipped.find(def->slot);
+        if (equippedIt != equipment.equipped.end()) {
+          if (!inventory.addItem(equippedIt->second)) {
+            inventory.addItem(*removed);
+            return;
+          }
+          equipment.equipped.erase(equippedIt);
+        }
+        equipment.equipped[def->slot] = *removed;
       }
     }
     return;

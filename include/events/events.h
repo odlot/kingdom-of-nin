@@ -15,3 +15,11 @@ struct FloatingTextEvent {
   std::string text;
   Position position;
 };
+
+enum class RegionTransition { Enter, Leave };
+
+struct RegionEvent {
+  RegionTransition transition;
+  std::string regionName;
+  Position position;
+};

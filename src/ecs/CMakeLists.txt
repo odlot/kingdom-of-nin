@@ -6,6 +6,7 @@ target_sources(ecs
     system/system.cc
     system/graphic_system.cc
     system/movement_system.cc
+    system/respawn_system.cc
 
   PUBLIC
     FILE_SET ecsHeaders
@@ -18,12 +19,15 @@ target_sources(ecs
       ${CMAKE_SOURCE_DIR}/include/ecs/system/system.h
       ${CMAKE_SOURCE_DIR}/include/ecs/system/movement_system.h
       ${CMAKE_SOURCE_DIR}/include/ecs/system/graphic_system.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/system/respawn_system.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/collision_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/health_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/inventory_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/level_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/loot_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/mana_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/mob_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/movement_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/equipment_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/stats_component.h

@@ -6,7 +6,9 @@
 #include "ecs/component/health_component.h"
 #include "ecs/component/inventory_component.h"
 #include "ecs/component/level_component.h"
+#include "ecs/component/loot_component.h"
 #include "ecs/component/mana_component.h"
+#include "ecs/component/mob_component.h"
 #include "ecs/component/movement_component.h"
 #include "ecs/component/stats_component.h"
 #include "ecs/component/transform_component.h"
@@ -30,6 +32,8 @@ Registry::Registry()
   registerComponent<InventoryComponent>();
   registerComponent<EquipmentComponent>();
   registerComponent<StatsComponent>();
+  registerComponent<LootComponent>();
+  registerComponent<MobComponent>();
 
   {
     auto signature = std::bitset<MAX_COMPONENTS>();

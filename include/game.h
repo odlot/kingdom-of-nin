@@ -9,6 +9,7 @@
 
 #include "camera.h"
 #include "ecs/registry.h"
+#include "ecs/system/respawn_system.h"
 #include "events/event_bus.h"
 #include "items/item_database.h"
 #include "ui/character_stats.h"
@@ -41,11 +42,17 @@ private:
   std::unique_ptr<ItemDatabase> itemDatabase;
   std::unique_ptr<EventBus> eventBus;
   std::unique_ptr<FloatingTextSystem> floatingTextSystem;
+  std::unique_ptr<RespawnSystem> respawnSystem;
   bool running = true;
   std::unique_ptr<Registry> registry;
   std::unique_ptr<Map> map;
   int playerEntityId = -1;
   std::vector<int> mobEntityIds;
+  std::vector<int> lootEntityIds;
   float attackCooldownRemaining = 0.0f;
   bool wasAttackPressed = false;
+  bool wasPickupPressed = false;
+  bool wasDebugPressed = false;
+  bool showDebugMobRanges = false;
+  int lastRegionIndex = -1;
 };
