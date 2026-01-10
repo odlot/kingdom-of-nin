@@ -55,4 +55,5 @@ private:
   bool wasDebugPressed = false;
   bool showDebugMobRanges = false;
   int lastRegionIndex = -1;
+  float playerHitFlashTimer = 0.0f;
 };

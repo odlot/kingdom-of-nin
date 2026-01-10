@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -62,6 +63,18 @@ std::string regionName(RegionType type) {
     return "Dungeon Entrance";
   }
   return "Region";
+}
+
+const char* mobTypeName(MobType type) {
+  switch (type) {
+  case MobType::Goblin:
+    return "Goblin";
+  case MobType::GoblinArcher:
+    return "Goblin Archer";
+  case MobType::GoblinBrute:
+    return "Goblin Brute";
+  }
+  return "Mob";
 }
 
 int regionIndexAt(const Map& map, int tileX, int tileY) {
@@ -339,6 +352,7 @@ void Game::update(float dt) {
     this->attackCooldownRemaining = std::max(0.0f, this->attackCooldownRemaining - dt);
   }
   this->floatingTextSystem->update(dt);
+  this->playerHitFlashTimer = std::max(0.0f, this->playerHitFlashTimer - dt);
   this->respawnSystem->update(dt, *this->map, *this->registry, this->mobEntityIds);
 
   int x = 0;
@@ -441,6 +455,7 @@ void Game::update(float dt) {
         this->registry->getComponent<StatsComponent>(this->playerEntityId);
     const EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
     const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
 
     const Position playerCenter(playerTransform.position.x + (playerCollision.width / 2.0f),
@@ -468,6 +483,10 @@ void Game::update(float dt) {
       this->eventBus->emitFloatingTextEvent(
           FloatingTextEvent{std::to_string(attackPower), mobCenter});
       if (mobHealth.current == 0) {
+        const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+        level.experience += mob.experience;
+        this->eventBus->emitFloatingTextEvent(
+            FloatingTextEvent{"XP +" + std::to_string(mob.experience), mobCenter});
         GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
         mobGraphic.color = SDL_Color({80, 80, 80, 255});
       }
@@ -531,6 +550,24 @@ void Game::update(float dt) {
       if (target.has_value()) {
         moveEntityToward(*this->map, mobTransform, mobCollision, mob.speed, *target, dt);
       }
+
+      mob.attackTimer = std::max(0.0f, mob.attackTimer - dt);
+      if (mob.attackTimer <= 0.0f) {
+        const float attackRangeSquared = mob.attackRange * mob.attackRange;
+        if (squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
+          HealthComponent& playerHealth =
+              this->registry->getComponent<HealthComponent>(this->playerEntityId);
+          if (playerHealth.current > 0) {
+            playerHealth.current = std::max(0, playerHealth.current - mob.attackDamage);
+            this->eventBus->emitDamageEvent(
+                DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{"-" + std::to_string(mob.attackDamage), playerCenter});
+            this->playerHitFlashTimer = 0.2f;
+            mob.attackTimer = mob.attackCooldown;
+          }
+        }
+      }
     }
   }
 
@@ -563,6 +600,9 @@ void Game::render() {
   SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 255);
   SDL_RenderClear(this->renderer);
   const Position& cameraPosition = this->camera->getPosition();
+  float mouseX = 0.0f;
+  float mouseY = 0.0f;
+  SDL_GetMouseState(&mouseX, &mouseY);
 
   { // Draw map tiles within the camera view
     const int startTileX = std::max(0, static_cast<int>(cameraPosition.x / TILE_SIZE));
@@ -613,6 +653,9 @@ void Game::render() {
       if (mobHealth.max <= 0) {
         continue;
       }
+      if (this->respawnSystem->isSpawning(mobEntityId)) {
+        continue;
+      }
       const TransformComponent& mobTransform =
           this->registry->getComponent<TransformComponent>(mobEntityId);
       const float healthRatio = std::clamp(
@@ -627,6 +670,43 @@ void Game::render() {
       barFill.w = barBg.w * healthRatio;
       SDL_SetRenderDrawColor(this->renderer, 200, 40, 40, 255);
       SDL_RenderFillRect(this->renderer, &barFill);
+    }
+  }
+
+  { // Mob hover labels
+    for (int mobEntityId : this->mobEntityIds) {
+      const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
+      if (mobHealth.current <= 0) {
+        continue;
+      }
+      if (this->respawnSystem->isSpawning(mobEntityId)) {
+        continue;
+      }
+      const TransformComponent& mobTransform =
+          this->registry->getComponent<TransformComponent>(mobEntityId);
+      const SDL_FRect mobRect = {mobTransform.position.x - cameraPosition.x,
+                                 mobTransform.position.y - cameraPosition.y,
+                                 static_cast<float>(TILE_SIZE), static_cast<float>(TILE_SIZE)};
+      if (mouseX < mobRect.x || mouseX > mobRect.x + mobRect.w || mouseY < mobRect.y ||
+          mouseY > mobRect.y + mobRect.h) {
+        continue;
+      }
+      const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+      const char* label = mobTypeName(mob.type);
+      SDL_Color textColor = {245, 245, 245, 255};
+      SDL_Surface* surface = TTF_RenderText_Solid(this->font, label, std::strlen(label), textColor);
+      SDL_Texture* texture = SDL_CreateTextureFromSurface(this->renderer, surface);
+      SDL_FRect textRect = {mobRect.x, mobRect.y - 18.0f, static_cast<float>(surface->w),
+                            static_cast<float>(surface->h)};
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
+      SDL_FRect bgRect = {textRect.x - 4.0f, textRect.y - 2.0f, textRect.w + 8.0f,
+                          textRect.h + 4.0f};
+      SDL_RenderFillRect(this->renderer, &bgRect);
+      SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
+      SDL_DestroySurface(surface);
+      SDL_DestroyTexture(texture);
+      break;
     }
   }
 
@@ -714,6 +794,22 @@ void Game::render() {
                                  attackPower, stats.strength, stats.dexterity, stats.intellect,
                                  stats.luck, stats.unspentPoints,
                                  this->inventoryUi->isStatsVisible());
+  }
+
+  { // Player hit flash
+    if (this->playerHitFlashTimer > 0.0f) {
+      const TransformComponent& playerTransform =
+          this->registry->getComponent<TransformComponent>(this->playerEntityId);
+      const CollisionComponent& playerCollision =
+          this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+      const float alpha = std::clamp(this->playerHitFlashTimer / 0.2f, 0.0f, 1.0f);
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 255, 80, 80, static_cast<Uint8>(180 * alpha));
+      SDL_FRect flashRect = {playerTransform.position.x - cameraPosition.x - 2.0f,
+                             playerTransform.position.y - cameraPosition.y - 2.0f,
+                             playerCollision.width + 4.0f, playerCollision.height + 4.0f};
+      SDL_RenderRect(this->renderer, &flashRect);
+    }
   }
 
   SDL_RenderPresent(this->renderer);
