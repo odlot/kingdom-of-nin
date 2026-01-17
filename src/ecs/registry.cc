@@ -1,5 +1,6 @@
 #include "ecs/registry.h"
 #include "SDL3/SDL.h"
+#include "ecs/component/buff_component.h"
 #include "ecs/component/collision_component.h"
 #include "ecs/component/equipment_component.h"
 #include "ecs/component/graphic_component.h"
@@ -10,10 +11,14 @@
 #include "ecs/component/mana_component.h"
 #include "ecs/component/mob_component.h"
 #include "ecs/component/movement_component.h"
+#include "ecs/component/pushback_component.h"
+#include "ecs/component/skill_bar_component.h"
+#include "ecs/component/skill_tree_component.h"
 #include "ecs/component/stats_component.h"
 #include "ecs/component/transform_component.h"
 #include "ecs/system/graphic_system.h"
 #include "ecs/system/movement_system.h"
+#include "ecs/system/pushback_system.h"
 #include <spdlog/spdlog.h>
 
 Registry::Registry()
@@ -34,6 +39,10 @@ Registry::Registry()
   registerComponent<StatsComponent>();
   registerComponent<LootComponent>();
   registerComponent<MobComponent>();
+  registerComponent<PushbackComponent>();
+  registerComponent<BuffComponent>();
+  registerComponent<SkillBarComponent>();
+  registerComponent<SkillTreeComponent>();
 
   {
     auto signature = std::bitset<MAX_COMPONENTS>();
@@ -48,6 +57,14 @@ Registry::Registry()
     signature.set(getComponentId<MovementComponent>(), true);
     signature.set(getComponentId<CollisionComponent>(), true);
     this->systems.push_back(std::make_unique<MovementSystem>(*this, signature));
+  }
+
+  {
+    auto signature = std::bitset<MAX_COMPONENTS>();
+    signature.set(getComponentId<TransformComponent>(), true);
+    signature.set(getComponentId<CollisionComponent>(), true);
+    signature.set(getComponentId<PushbackComponent>(), true);
+    this->systems.push_back(std::make_unique<PushbackSystem>(*this, signature));
   }
 }
 

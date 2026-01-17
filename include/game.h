@@ -3,19 +3,26 @@
 #include "SDL3/SDL_render.h"
 #include "SDL3/SDL_video.h"
 #include <SDL3_ttf/SDL_ttf.h>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "camera.h"
+#include "ecs/position.h"
 #include "ecs/registry.h"
 #include "ecs/system/respawn_system.h"
 #include "events/event_bus.h"
 #include "items/item_database.h"
+#include "skills/skill_database.h"
+#include "skills/skill_tree.h"
+#include "ui/buff_bar.h"
 #include "ui/character_stats.h"
 #include "ui/floating_text_system.h"
 #include "ui/inventory.h"
 #include "ui/minimap.h"
+#include "ui/skill_bar.h"
+#include "ui/skill_tree.h"
 #include "world/map.h"
 
 const int WINDOW_WIDTH = 640;
@@ -40,9 +47,14 @@ private:
   std::unique_ptr<CharacterStats> characterStats;
   std::unique_ptr<Minimap> minimap;
   std::unique_ptr<ItemDatabase> itemDatabase;
+  std::unique_ptr<SkillDatabase> skillDatabase;
+  std::unique_ptr<SkillTreeDefinition> skillTreeDefinition;
   std::unique_ptr<EventBus> eventBus;
   std::unique_ptr<FloatingTextSystem> floatingTextSystem;
   std::unique_ptr<RespawnSystem> respawnSystem;
+  std::unique_ptr<SkillBar> skillBar;
+  std::unique_ptr<BuffBar> buffBar;
+  std::unique_ptr<SkillTree> skillTree;
   bool running = true;
   std::unique_ptr<Registry> registry;
   std::unique_ptr<Map> map;
@@ -50,10 +62,18 @@ private:
   std::vector<int> mobEntityIds;
   std::vector<int> lootEntityIds;
   float attackCooldownRemaining = 0.0f;
+  std::array<bool, 5> wasSkillPressed = {false, false, false, false, false};
   bool wasAttackPressed = false;
   bool wasPickupPressed = false;
+  bool wasResurrectPressed = false;
   bool wasDebugPressed = false;
   bool showDebugMobRanges = false;
   int lastRegionIndex = -1;
   float playerHitFlashTimer = 0.0f;
+  float playerKnockbackImmunityRemaining = 0.0f;
+  int facingX = 0;
+  int facingY = 1;
+  bool isPlayerGhost = false;
+  bool hasCorpse = false;
+  Position corpsePosition = Position(0.0f, 0.0f);
 };

@@ -7,8 +7,19 @@ ItemDatabase::ItemDatabase() {
   basicSword.slot = ItemSlot::Weapon;
   basicSword.requiredLevel = 1;
   basicSword.allowedClasses = {CharacterClass::Any};
+  basicSword.weaponType = WeaponType::OneHandedSword;
   basicSword.stats.attackPower = 5;
   addItem(basicSword);
+
+  ItemDef basicSpear;
+  basicSpear.id = 5;
+  basicSpear.name = "Basic Spear";
+  basicSpear.slot = ItemSlot::Weapon;
+  basicSpear.requiredLevel = 1;
+  basicSpear.allowedClasses = {CharacterClass::Any};
+  basicSpear.weaponType = WeaponType::Spear;
+  basicSpear.stats.attackPower = 6;
+  addItem(basicSpear);
 
   ItemDef basicShield;
   basicShield.id = 2;

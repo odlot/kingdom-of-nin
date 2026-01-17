@@ -1,7 +1,7 @@
 FetchContent_Declare(SDL
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG release-3.2.28
-    GIT_SHALLOW ON  
+    GIT_SHALLOW ON
     EXCLUDE_FROM_ALL
     SYSTEM)
 FetchContent_MakeAvailable(SDL)
@@ -19,6 +19,7 @@ add_subdirectory(items)
 add_subdirectory(ecs)
 add_subdirectory(ui)
 add_subdirectory(events)
+add_subdirectory(skills)
 
 add_library(game)
 
@@ -37,4 +38,5 @@ target_sources(game
       ${CMAKE_SOURCE_DIR}/include/camera.h
 )
 
-target_link_libraries(game PUBLIC SDL3_ttf::SDL3_ttf SDL3::SDL3 world ui items events PRIVATE ecs spdlog::spdlog)
+target_link_libraries(game PUBLIC SDL3_ttf::SDL3_ttf SDL3::SDL3 world ui items events skills
+                           PRIVATE ecs spdlog::spdlog)

@@ -30,6 +30,13 @@
 - `StatsComponent`: base stats (attack power, armor; extend later).
 - Computed stats built from base + equipped item modifiers.
 
+## Skill Tree Prototype Plan
+
+- `SkillDef`: data-driven skill definitions (name, cooldown, optional buff).
+- `SkillTreeDefinition`: node layout with prerequisites for branching unlocks.
+- `SkillTreeComponent`: per-character unlocked skills and unspent skill points.
+- Level-up grants skill points (prototype: 1 per level).
+
 ## API Design
 
 - Internal engine APIs for systems: `Update(dt)`, `Render()`, `HandleInput()`.

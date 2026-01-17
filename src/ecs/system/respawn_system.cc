@@ -8,6 +8,7 @@
 #include "ecs/component/graphic_component.h"
 #include "ecs/component/health_component.h"
 #include "ecs/component/mob_component.h"
+#include "ecs/component/pushback_component.h"
 #include "ecs/component/transform_component.h"
 #include "world/tile.h"
 
@@ -87,6 +88,8 @@ int spawnMob(Registry& registry, const Position& position, const Region& region,
       std::make_unique<GraphicComponent>(position, definition.color), mobEntityId);
   registry.registerComponentForEntity<CollisionComponent>(
       std::make_unique<CollisionComponent>(32.0f, 32.0f, false), mobEntityId);
+  registry.registerComponentForEntity<PushbackComponent>(
+      std::make_unique<PushbackComponent>(0.0f, 0.0f, 0.0f), mobEntityId);
   registry.registerComponentForEntity<HealthComponent>(
       std::make_unique<HealthComponent>(definition.maxHealth, definition.maxHealth), mobEntityId);
   const int tileX = static_cast<int>(position.x / TILE_SIZE);

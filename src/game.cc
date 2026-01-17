@@ -1,4 +1,5 @@
 #include "game.h"
+#include "ecs/component/buff_component.h"
 #include "ecs/component/collision_component.h"
 #include "ecs/component/equipment_component.h"
 #include "ecs/component/graphic_component.h"
@@ -9,14 +10,21 @@
 #include "ecs/component/mana_component.h"
 #include "ecs/component/mob_component.h"
 #include "ecs/component/movement_component.h"
+#include "ecs/component/pushback_component.h"
+#include "ecs/component/skill_bar_component.h"
+#include "ecs/component/skill_tree_component.h"
 #include "ecs/component/stats_component.h"
 #include "ecs/component/transform_component.h"
 #include "ecs/system/graphic_system.h"
 #include "ecs/system/movement_system.h"
+#include "ecs/system/pushback_system.h"
 #include "events/events.h"
+#include "ui/buff_bar.h"
 #include "ui/floating_text_system.h"
 #include "ui/inventory.h"
 #include "ui/minimap.h"
+#include "ui/skill_bar.h"
+#include "ui/skill_tree.h"
 #include "world/generator.h"
 #include "world/region.h"
 #include "world/tile.h"
@@ -38,6 +46,10 @@ constexpr int MINIMAP_MARGIN = 12;
 constexpr float ATTACK_RANGE = 56.0f;
 constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
+constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
+constexpr float PUSHBACK_DURATION = 0.2f;
+constexpr float PLAYER_KNOCKBACK_IMMUNITY_SECONDS = 2.0f;
+constexpr float RESURRECT_RANGE = 28.0f;
 
 namespace {
 std::optional<Coordinate> firstWalkableInRegion(const Map& map, const Region& region) {
@@ -105,6 +117,41 @@ void drawCircle(SDL_Renderer* renderer, const Position& center, float radius,
   }
 }
 
+void drawFacingArc(SDL_Renderer* renderer, const Position& center, float radius, int facingX,
+                   int facingY, float halfAngle, const Position& cameraPosition, SDL_Color color) {
+  float fx = static_cast<float>(facingX);
+  float fy = static_cast<float>(facingY);
+  const float facingLength = std::sqrt((fx * fx) + (fy * fy));
+  if (facingLength <= 0.001f) {
+    fx = 0.0f;
+    fy = 1.0f;
+  } else {
+    fx /= facingLength;
+    fy /= facingLength;
+  }
+  const float centerAngle = std::atan2(fy, fx);
+  constexpr int kSegments = 16;
+  SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+  float prevX = center.x + radius * std::cos(centerAngle - halfAngle);
+  float prevY = center.y + radius * std::sin(centerAngle - halfAngle);
+  for (int i = 1; i <= kSegments; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(kSegments);
+    const float angle = centerAngle - halfAngle + (t * halfAngle * 2.0f);
+    const float nextX = center.x + radius * std::cos(angle);
+    const float nextY = center.y + radius * std::sin(angle);
+    SDL_RenderLine(renderer, prevX - cameraPosition.x, prevY - cameraPosition.y,
+                   nextX - cameraPosition.x, nextY - cameraPosition.y);
+    prevX = nextX;
+    prevY = nextY;
+  }
+  SDL_RenderLine(renderer, center.x - cameraPosition.x, center.y - cameraPosition.y,
+                 center.x + radius * std::cos(centerAngle - halfAngle) - cameraPosition.x,
+                 center.y + radius * std::sin(centerAngle - halfAngle) - cameraPosition.y);
+  SDL_RenderLine(renderer, center.x - cameraPosition.x, center.y - cameraPosition.y,
+                 center.x + radius * std::cos(centerAngle + halfAngle) - cameraPosition.x,
+                 center.y + radius * std::sin(centerAngle + halfAngle) - cameraPosition.y);
+}
+
 } // namespace
 
 int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& equipment,
@@ -126,12 +173,103 @@ float squaredDistance(const Position& a, const Position& b) {
   return (dx * dx) + (dy * dy);
 }
 
-void applyLevelUps(LevelComponent& level, StatsComponent& stats) {
+bool isInFacingArc(const Position& origin, const Position& target, int facingX, int facingY,
+                   float halfAngle) {
+  const float dx = target.x - origin.x;
+  const float dy = target.y - origin.y;
+  const float length = std::sqrt((dx * dx) + (dy * dy));
+  if (length <= 0.001f) {
+    return true;
+  }
+  const float fx = static_cast<float>(facingX);
+  const float fy = static_cast<float>(facingY);
+  const float facingLength = std::sqrt((fx * fx) + (fy * fy));
+  if (facingLength <= 0.001f) {
+    return true;
+  }
+  const float nx = dx / length;
+  const float ny = dy / length;
+  const float fnx = fx / facingLength;
+  const float fny = fy / facingLength;
+  const float dot = (nx * fnx) + (ny * fny);
+  return dot >= std::cos(halfAngle);
+}
+
+struct AttackProfile {
+  float range = ATTACK_RANGE;
+  float halfAngle = 0.75f;
+  float cooldown = ATTACK_COOLDOWN_SECONDS;
+};
+
+void applyOrRefreshBuff(BuffComponent& buffs, int buffId, const std::string& name, float duration) {
+  for (BuffInstance& buff : buffs.buffs) {
+    if (buff.id == buffId) {
+      buff.remaining = duration;
+      buff.duration = duration;
+      buff.name = name;
+      return;
+    }
+  }
+  BuffInstance instance;
+  instance.id = buffId;
+  instance.name = name;
+  instance.remaining = duration;
+  instance.duration = duration;
+  buffs.buffs.push_back(std::move(instance));
+}
+
+bool isSkillUnlocked(const SkillTreeComponent& tree, int skillId) {
+  return tree.unlockedSkills.count(skillId) > 0;
+}
+
+AttackProfile attackProfileForWeapon(const EquipmentComponent& equipment,
+                                     const ItemDatabase& database) {
+  AttackProfile profile;
+  auto weaponIt = equipment.equipped.find(ItemSlot::Weapon);
+  if (weaponIt == equipment.equipped.end()) {
+    return profile;
+  }
+  const ItemDef* def = database.getItem(weaponIt->second.itemId);
+  if (!def) {
+    return profile;
+  }
+  switch (def->weaponType) {
+  case WeaponType::OneHandedSword:
+    profile.halfAngle = 0.75f;
+    profile.range = ATTACK_RANGE;
+    profile.cooldown = 0.5f;
+    break;
+  case WeaponType::TwoHandedSword:
+    profile.halfAngle = 0.9f;
+    profile.range = ATTACK_RANGE * 1.1f;
+    profile.cooldown = 0.8f;
+    break;
+  case WeaponType::Polearm:
+    profile.halfAngle = 0.6f;
+    profile.range = ATTACK_RANGE * 1.3f;
+    profile.cooldown = 0.9f;
+    break;
+  case WeaponType::Spear:
+    profile.halfAngle = 0.5f;
+    profile.range = ATTACK_RANGE * 1.4f;
+    profile.cooldown = 0.7f;
+    break;
+  case WeaponType::None:
+    profile.halfAngle = 0.65f;
+    profile.range = ATTACK_RANGE * 0.9f;
+    profile.cooldown = ATTACK_COOLDOWN_SECONDS;
+    break;
+  }
+  return profile;
+}
+
+void applyLevelUps(LevelComponent& level, StatsComponent& stats, SkillTreeComponent& skillTree) {
   while (level.experience >= level.nextLevelExperience) {
     level.experience -= level.nextLevelExperience;
     level.level += 1;
     level.nextLevelExperience += 100;
     stats.unspentPoints += 5;
+    skillTree.unspentPoints += 1;
   }
 }
 
@@ -163,6 +301,28 @@ bool equipItemByIndex(InventoryComponent& inventory, EquipmentComponent& equipme
 Position centerForEntity(const TransformComponent& transform, const CollisionComponent& collision) {
   return Position(transform.position.x + (collision.width / 2.0f),
                   transform.position.y + (collision.height / 2.0f));
+}
+
+void applyPushback(Registry& registry, int targetEntityId, const Position& fromPosition,
+                   float distance, float duration) {
+  TransformComponent& targetTransform = registry.getComponent<TransformComponent>(targetEntityId);
+  const CollisionComponent& targetCollision =
+      registry.getComponent<CollisionComponent>(targetEntityId);
+  const Position targetCenter = centerForEntity(targetTransform, targetCollision);
+  float dx = targetCenter.x - fromPosition.x;
+  float dy = targetCenter.y - fromPosition.y;
+  const float length = std::sqrt((dx * dx) + (dy * dy));
+  if (length <= 0.001f || duration <= 0.0f) {
+    return;
+  }
+  dx /= length;
+  dy /= length;
+
+  PushbackComponent& pushback = registry.getComponent<PushbackComponent>(targetEntityId);
+  const float speed = distance / duration;
+  pushback.velocityX = dx * speed;
+  pushback.velocityY = dy * speed;
+  pushback.remaining = duration;
 }
 
 bool createLootEntity(Registry& registry, const Position& position, int itemId,
@@ -241,11 +401,16 @@ Game::Game() {
   }
   this->registry = std::make_unique<Registry>();
   this->itemDatabase = std::make_unique<ItemDatabase>();
+  this->skillDatabase = std::make_unique<SkillDatabase>();
+  this->skillTreeDefinition = std::make_unique<SkillTreeDefinition>();
   this->eventBus = std::make_unique<EventBus>();
   this->floatingTextSystem = std::make_unique<FloatingTextSystem>(*this->eventBus);
   this->respawnSystem = std::make_unique<RespawnSystem>();
   this->inventoryUi = std::make_unique<Inventory>();
   this->characterStats = std::make_unique<CharacterStats>();
+  this->skillBar = std::make_unique<SkillBar>();
+  this->buffBar = std::make_unique<BuffBar>();
+  this->skillTree = std::make_unique<SkillTree>();
   if (!TTF_Init()) {
     logger->error("SDL TTF could not initialize! SDL_Error: {}", SDL_GetError());
     throw std::runtime_error("SDL TTF Initialization failed");
@@ -273,6 +438,8 @@ Game::Game() {
       this->playerEntityId);
   this->registry->registerComponentForEntity<CollisionComponent>(
       std::make_unique<CollisionComponent>(32.0f, 32.0f, true), this->playerEntityId);
+  this->registry->registerComponentForEntity<PushbackComponent>(
+      std::make_unique<PushbackComponent>(0.0f, 0.0f, 0.0f), this->playerEntityId);
   this->registry->registerComponentForEntity<HealthComponent>(
       std::make_unique<HealthComponent>(100, 100), this->playerEntityId);
   this->registry->registerComponentForEntity<ManaComponent>(std::make_unique<ManaComponent>(50, 50),
@@ -285,6 +452,12 @@ Game::Game() {
       std::make_unique<EquipmentComponent>(), this->playerEntityId);
   this->registry->registerComponentForEntity<StatsComponent>(std::make_unique<StatsComponent>(),
                                                              this->playerEntityId);
+  this->registry->registerComponentForEntity<SkillBarComponent>(
+      std::make_unique<SkillBarComponent>(), this->playerEntityId);
+  this->registry->registerComponentForEntity<SkillTreeComponent>(
+      std::make_unique<SkillTreeComponent>(), this->playerEntityId);
+  this->registry->registerComponentForEntity<BuffComponent>(std::make_unique<BuffComponent>(),
+                                                            this->playerEntityId);
 
   {
     InventoryComponent& inventory =
@@ -297,8 +470,22 @@ Game::Game() {
     }
   }
 
+  { // Assign starter skills to the player
+    SkillBarComponent& skills =
+        this->registry->getComponent<SkillBarComponent>(this->playerEntityId);
+    skills.slots[0].skillId = 1;
+    skills.slots[1].skillId = 2;
+    skills.slots[2].skillId = 3;
+  }
+
+  { // Unlock the starter skill
+    SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    skillTree.unlockedSkills.insert(1);
+  }
+
   { // Spawn loot items near the starting zone
-    const std::array<int, 4> lootItems = {1, 2, 3, 4};
+    const std::array<int, 5> lootItems = {1, 2, 3, 4, 5};
     const std::array<std::pair<int, int>, 6> offsets = {
         std::make_pair(-2, 0), std::make_pair(2, 0),   std::make_pair(0, -2),
         std::make_pair(0, 2),  std::make_pair(-3, -1), std::make_pair(3, 1)};
@@ -351,6 +538,10 @@ void Game::update(float dt) {
   if (this->attackCooldownRemaining > 0.0f) {
     this->attackCooldownRemaining = std::max(0.0f, this->attackCooldownRemaining - dt);
   }
+  if (this->playerKnockbackImmunityRemaining > 0.0f) {
+    this->playerKnockbackImmunityRemaining =
+        std::max(0.0f, this->playerKnockbackImmunityRemaining - dt);
+  }
   this->floatingTextSystem->update(dt);
   this->playerHitFlashTimer = std::max(0.0f, this->playerHitFlashTimer - dt);
   this->respawnSystem->update(dt, *this->map, *this->registry, this->mobEntityIds);
@@ -371,10 +562,17 @@ void Game::update(float dt) {
     x = 1;
   }
   auto result = std::make_pair(x, y);
+  if (x != 0 || y != 0) {
+    this->facingX = x;
+    this->facingY = y;
+  }
 
   const bool attackPressed = keyboardState[SDL_SCANCODE_SPACE];
   const bool pickupPressed = keyboardState[SDL_SCANCODE_F];
   const bool debugPressed = keyboardState[SDL_SCANCODE_D];
+  const bool resurrectPressed = keyboardState[SDL_SCANCODE_R];
+  const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3,
+                                                 SDL_SCANCODE_4, SDL_SCANCODE_5};
   float mouseX = 0.0f;
   float mouseY = 0.0f;
   const Uint32 mouseState = SDL_GetMouseState(&mouseX, &mouseY);
@@ -393,13 +591,64 @@ void Game::update(float dt) {
     this->characterStats->handleInput(static_cast<int>(mouseX), static_cast<int>(mouseY),
                                       mousePressed, stats, this->inventoryUi->isStatsVisible());
   }
+  {
+    SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    this->skillTree->handleInput(keyboardState, static_cast<int>(mouseX),
+                                 static_cast<int>(mouseY), mousePressed, skillTree,
+                                 *this->skillTreeDefinition, WINDOW_WIDTH);
+  }
 
   {
     LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    applyLevelUps(level, stats);
+    SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    applyLevelUps(level, stats, skillTree);
   }
-  if (pickupPressed && !this->wasPickupPressed) {
+
+  {
+    SkillBarComponent& skills =
+        this->registry->getComponent<SkillBarComponent>(this->playerEntityId);
+    BuffComponent& buffs = this->registry->getComponent<BuffComponent>(this->playerEntityId);
+    SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    for (auto it = buffs.buffs.begin(); it != buffs.buffs.end();) {
+      it->remaining = std::max(0.0f, it->remaining - dt);
+      if (it->remaining <= 0.0f) {
+        it = buffs.buffs.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    for (std::size_t i = 0; i < skills.slots.size(); ++i) {
+      SkillSlot& slot = skills.slots[i];
+      if (slot.cooldownRemaining > 0.0f) {
+        slot.cooldownRemaining = std::max(0.0f, slot.cooldownRemaining - dt);
+      }
+      const bool pressed = keyboardState[skillKeys[i]];
+      if (pressed && !this->wasSkillPressed[i]) {
+        const SkillDef* def =
+            (slot.skillId > 0) ? this->skillDatabase->getSkill(slot.skillId) : nullptr;
+        const bool unlocked = def && isSkillUnlocked(skillTree, def->id);
+        if (!this->isPlayerGhost && unlocked && slot.cooldownRemaining <= 0.0f) {
+          slot.cooldownRemaining = def->cooldown;
+          this->eventBus->emitFloatingTextEvent(
+              FloatingTextEvent{"Skill: " + def->name, playerCenter});
+          if (def->buffDuration > 0.0f) {
+            applyOrRefreshBuff(buffs, def->id, def->name, def->buffDuration);
+          }
+        }
+      }
+      this->wasSkillPressed[i] = pressed;
+    }
+  }
+  if (!this->isPlayerGhost && pickupPressed && !this->wasPickupPressed) {
     InventoryComponent& inventory =
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     const TransformComponent& playerTransform =
@@ -446,7 +695,8 @@ void Game::update(float dt) {
     this->showDebugMobRanges = !this->showDebugMobRanges;
   }
   this->wasDebugPressed = debugPressed;
-  if (attackPressed && !this->wasAttackPressed && this->attackCooldownRemaining <= 0.0f) {
+  if (!this->isPlayerGhost && attackPressed && !this->wasAttackPressed &&
+      this->attackCooldownRemaining <= 0.0f) {
     const TransformComponent& playerTransform =
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
     const CollisionComponent& playerCollision =
@@ -457,10 +707,11 @@ void Game::update(float dt) {
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
     LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
     const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
+    const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
 
     const Position playerCenter(playerTransform.position.x + (playerCollision.width / 2.0f),
                                 playerTransform.position.y + (playerCollision.height / 2.0f));
-    const float rangeSquared = ATTACK_RANGE * ATTACK_RANGE;
+    const float rangeSquared = attackProfile.range * attackProfile.range;
 
     for (int mobEntityId : this->mobEntityIds) {
       HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
@@ -477,7 +728,13 @@ void Game::update(float dt) {
       if (squaredDistance(playerCenter, mobCenter) > rangeSquared) {
         continue;
       }
+      if (!isInFacingArc(playerCenter, mobCenter, this->facingX, this->facingY,
+                         attackProfile.halfAngle)) {
+        continue;
+      }
       mobHealth.current = std::max(0, mobHealth.current - attackPower);
+      applyPushback(*this->registry, mobEntityId, playerCenter, PUSHBACK_DISTANCE,
+                    PUSHBACK_DURATION);
       this->eventBus->emitDamageEvent(
           DamageEvent{this->playerEntityId, mobEntityId, attackPower, mobCenter});
       this->eventBus->emitFloatingTextEvent(
@@ -492,7 +749,7 @@ void Game::update(float dt) {
       }
     }
 
-    this->attackCooldownRemaining = ATTACK_COOLDOWN_SECONDS;
+    this->attackCooldownRemaining = attackProfile.cooldown;
   }
   this->wasAttackPressed = attackPressed;
 
@@ -504,6 +761,10 @@ void Game::update(float dt) {
     MovementSystem* movementSystem = dynamic_cast<MovementSystem*>((*it).get());
     if (movementSystem) {
       movementSystem->update(result, dt, *this->map);
+    }
+    PushbackSystem* pushbackSystem = dynamic_cast<PushbackSystem*>((*it).get());
+    if (pushbackSystem) {
+      pushbackSystem->update(dt, *this->map);
     }
   }
 
@@ -530,6 +791,9 @@ void Game::update(float dt) {
           this->registry->getComponent<CollisionComponent>(mobEntityId);
       MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
       const Position mobCenter = centerForEntity(mobTransform, mobCollision);
+      const HealthComponent& playerHealth =
+          this->registry->getComponent<HealthComponent>(this->playerEntityId);
+      const bool playerAlive = !this->isPlayerGhost && playerHealth.current > 0;
       const bool playerInRegion =
           playerTileX >= mob.regionX && playerTileX < mob.regionX + mob.regionWidth &&
           playerTileY >= mob.regionY && playerTileY < mob.regionY + mob.regionHeight;
@@ -541,7 +805,7 @@ void Game::update(float dt) {
       const float distToHome = squaredDistance(mobCenter, homeCenter);
 
       std::optional<Position> target;
-      if (playerInRegion && distToPlayer <= (mob.aggroRange * mob.aggroRange)) {
+      if (playerAlive && playerInRegion && distToPlayer <= (mob.aggroRange * mob.aggroRange)) {
         target = playerTransform.position;
       } else if (distToHome > 4.0f) {
         target = homePosition;
@@ -554,7 +818,7 @@ void Game::update(float dt) {
       mob.attackTimer = std::max(0.0f, mob.attackTimer - dt);
       if (mob.attackTimer <= 0.0f) {
         const float attackRangeSquared = mob.attackRange * mob.attackRange;
-        if (squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
+        if (playerAlive && squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
           HealthComponent& playerHealth =
               this->registry->getComponent<HealthComponent>(this->playerEntityId);
           if (playerHealth.current > 0) {
@@ -563,12 +827,53 @@ void Game::update(float dt) {
                 DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
             this->eventBus->emitFloatingTextEvent(
                 FloatingTextEvent{"-" + std::to_string(mob.attackDamage), playerCenter});
+            if (this->playerKnockbackImmunityRemaining <= 0.0f) {
+              applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
+                            PUSHBACK_DURATION);
+              this->playerKnockbackImmunityRemaining = PLAYER_KNOCKBACK_IMMUNITY_SECONDS;
+            }
             this->playerHitFlashTimer = 0.2f;
             mob.attackTimer = mob.attackCooldown;
           }
         }
       }
     }
+  }
+
+  {
+    TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    GraphicComponent& playerGraphic =
+        this->registry->getComponent<GraphicComponent>(this->playerEntityId);
+    HealthComponent& playerHealth =
+        this->registry->getComponent<HealthComponent>(this->playerEntityId);
+    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+
+    if (!this->isPlayerGhost && playerHealth.current <= 0) {
+      this->isPlayerGhost = true;
+      this->hasCorpse = true;
+      this->corpsePosition = playerTransform.position;
+      playerGraphic.color = SDL_Color({160, 200, 255, 180});
+      this->eventBus->emitFloatingTextEvent(FloatingTextEvent{"You died", playerCenter});
+    }
+
+    if (this->isPlayerGhost && this->hasCorpse) {
+      const Position corpseCenter(this->corpsePosition.x + (playerCollision.width / 2.0f),
+                                  this->corpsePosition.y + (playerCollision.height / 2.0f));
+      const float distToCorpse = squaredDistance(playerCenter, corpseCenter);
+      if (distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE) && resurrectPressed &&
+          !this->wasResurrectPressed) {
+        this->isPlayerGhost = false;
+        this->hasCorpse = false;
+        playerHealth.current = playerHealth.max;
+        playerGraphic.color = SDL_Color({240, 240, 240, 255});
+        this->playerKnockbackImmunityRemaining = 0.0f;
+        this->eventBus->emitFloatingTextEvent(FloatingTextEvent{"Resurrected", playerCenter});
+      }
+    }
+    this->wasResurrectPressed = resurrectPressed;
   }
 
   const TransformComponent& playerTransform =
@@ -645,6 +950,50 @@ void Game::render() {
     if (graphicSystem) {
       graphicSystem->render(this->renderer, cameraPosition);
     }
+  }
+
+  if (this->hasCorpse) {
+    SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(this->renderer, 180, 200, 255, 200);
+    SDL_FRect corpseRect = {this->corpsePosition.x - cameraPosition.x,
+                            this->corpsePosition.y - cameraPosition.y,
+                            static_cast<float>(TILE_SIZE), static_cast<float>(TILE_SIZE)};
+    SDL_RenderRect(this->renderer, &corpseRect);
+    SDL_FRect corpseFill = {corpseRect.x + 6.0f, corpseRect.y + 6.0f, corpseRect.w - 12.0f,
+                            corpseRect.h - 12.0f};
+    SDL_SetRenderDrawColor(this->renderer, 120, 160, 220, 120);
+    SDL_RenderFillRect(this->renderer, &corpseFill);
+  }
+
+  { // Player facing marker
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const float centerX = playerTransform.position.x + (playerCollision.width / 2.0f);
+    const float centerY = playerTransform.position.y + (playerCollision.height / 2.0f);
+    const float markerOffset = (playerCollision.width / 2.0f) + 2.0f;
+    const float markerSize = 6.0f;
+    const float markerX = centerX + (this->facingX * markerOffset) - (markerSize / 2.0f);
+    const float markerY = centerY + (this->facingY * markerOffset) - (markerSize / 2.0f);
+    SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 255);
+    SDL_FRect markerRect = {markerX - cameraPosition.x, markerY - cameraPosition.y, markerSize,
+                            markerSize};
+    SDL_RenderFillRect(this->renderer, &markerRect);
+  }
+
+  { // Facing arc (melee)
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const EquipmentComponent& equipment =
+        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
+    SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+    drawFacingArc(this->renderer, playerCenter, attackProfile.range, this->facingX, this->facingY,
+                  attackProfile.halfAngle, cameraPosition, SDL_Color{255, 255, 255, 80});
   }
 
   { // Mob HP bars
@@ -763,6 +1112,34 @@ void Game::render() {
     SDL_DestroyTexture(texture);
   }
 
+  if (this->isPlayerGhost && this->hasCorpse) {
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    const Position corpseCenter(this->corpsePosition.x + (playerCollision.width / 2.0f),
+                                this->corpsePosition.y + (playerCollision.height / 2.0f));
+    const float distToCorpse = squaredDistance(playerCenter, corpseCenter);
+    const bool inRange = distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE);
+    const std::string prompt =
+        inRange ? "Press R to resurrect" : "You are a spirit. Return to your corpse.";
+    SDL_Color textColor = {255, 240, 200, 255};
+    SDL_Surface* surface =
+        TTF_RenderText_Solid(this->font, prompt.c_str(), prompt.length(), textColor);
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(this->renderer, surface);
+    SDL_FRect textRect = {12.0f, 40.0f, static_cast<float>(surface->w),
+                          static_cast<float>(surface->h)};
+    SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
+    SDL_FRect bgRect = {textRect.x - 6.0f, textRect.y - 4.0f, textRect.w + 12.0f,
+                        textRect.h + 8.0f};
+    SDL_RenderFillRect(this->renderer, &bgRect);
+    SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
+    SDL_DestroySurface(surface);
+    SDL_DestroyTexture(texture);
+  }
+
   {
     const InventoryComponent& inventory =
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
@@ -794,6 +1171,27 @@ void Game::render() {
                                  attackPower, stats.strength, stats.dexterity, stats.intellect,
                                  stats.luck, stats.unspentPoints,
                                  this->inventoryUi->isStatsVisible());
+  }
+
+  {
+    const SkillBarComponent& skills =
+        this->registry->getComponent<SkillBarComponent>(this->playerEntityId);
+    const SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    this->skillBar->render(this->renderer, this->font, skills, skillTree, *this->skillDatabase,
+                           WINDOW_WIDTH, WINDOW_HEIGHT);
+  }
+
+  {
+    const BuffComponent& buffs = this->registry->getComponent<BuffComponent>(this->playerEntityId);
+    this->buffBar->render(this->renderer, this->font, buffs);
+  }
+
+  {
+    const SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    this->skillTree->render(this->renderer, this->font, skillTree, *this->skillTreeDefinition,
+                            *this->skillDatabase, WINDOW_WIDTH, WINDOW_HEIGHT);
   }
 
   { // Player hit flash

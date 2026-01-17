@@ -37,3 +37,4 @@ Players want a satisfying, replayable RPG loop with class identity, loot progres
 - Introduce data-driven items with inventory/equipment.
 - Add a basic weapon (sword) that modifies attack power.
 - Surface attack power in the HUD to validate progression.
+- Add a skill tree UI with unlockable skills to validate class progression.
