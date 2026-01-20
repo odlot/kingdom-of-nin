@@ -14,6 +14,7 @@ public:
     std::string text;
     Position position;
     float lifetime = 0.0f;
+    FloatingTextKind kind = FloatingTextKind::Info;
   };
 
   explicit FloatingTextSystem(EventBus& eventBus);

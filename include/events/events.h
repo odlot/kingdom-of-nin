@@ -11,9 +11,12 @@ struct DamageEvent {
   Position targetPosition;
 };
 
+enum class FloatingTextKind { Damage = 0, CritDamage, Heal, Info };
+
 struct FloatingTextEvent {
   std::string text;
   Position position;
+  FloatingTextKind kind = FloatingTextKind::Info;
 };
 
 enum class RegionTransition { Enter, Leave };

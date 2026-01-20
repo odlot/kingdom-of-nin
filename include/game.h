@@ -5,6 +5,7 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <array>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -76,4 +77,5 @@ private:
   bool isPlayerGhost = false;
   bool hasCorpse = false;
   Position corpsePosition = Position(0.0f, 0.0f);
+  std::mt19937 rng;
 };

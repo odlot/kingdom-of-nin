@@ -46,6 +46,8 @@ constexpr int MINIMAP_MARGIN = 12;
 constexpr float ATTACK_RANGE = 56.0f;
 constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
+constexpr float PLAYER_CRIT_CHANCE = 0.12f;
+constexpr float PLAYER_CRIT_MULTIPLIER = 1.5f;
 constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
 constexpr float PUSHBACK_DURATION = 0.2f;
 constexpr float PLAYER_KNOCKBACK_IMMUNITY_SECONDS = 2.0f;
@@ -403,6 +405,7 @@ Game::Game() {
   if (!logger) {
     logger = spdlog::stdout_color_mt("console");
   }
+  this->rng = std::mt19937(std::random_device{}());
   logger->info("Initializing SDL");
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     logger->error("SDL could not initialize! SDL_Error: {}", SDL_GetError());
@@ -660,8 +663,8 @@ void Game::update(float dt) {
         const bool unlocked = def && isSkillUnlocked(skillTree, def->id);
         if (!this->isPlayerGhost && unlocked && slot.cooldownRemaining <= 0.0f) {
           slot.cooldownRemaining = def->cooldown;
-          this->eventBus->emitFloatingTextEvent(
-              FloatingTextEvent{"Skill: " + def->name, playerCenter});
+        this->eventBus->emitFloatingTextEvent(
+            FloatingTextEvent{"Skill: " + def->name, playerCenter, FloatingTextKind::Info});
           if (def->buffDuration > 0.0f) {
             applyOrRefreshBuff(buffs, def->id, def->name, def->buffDuration);
           }
@@ -700,7 +703,8 @@ void Game::update(float dt) {
       if (inventory.addItem(item)) {
         const ItemDef* def = this->itemDatabase->getItem(item.itemId);
         std::string name = def ? def->name : "Item";
-        this->eventBus->emitFloatingTextEvent(FloatingTextEvent{"Picked up " + name, playerCenter});
+        this->eventBus->emitFloatingTextEvent(
+            FloatingTextEvent{"Picked up " + name, playerCenter, FloatingTextKind::Info});
         GraphicComponent& graphic = this->registry->getComponent<GraphicComponent>(closestLootId);
         graphic.color = SDL_Color({0, 0, 0, 0});
         TransformComponent& transform =
@@ -730,6 +734,11 @@ void Game::update(float dt) {
     LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
     const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
     const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
+    std::uniform_real_distribution<float> critRoll(0.0f, 1.0f);
+    const bool isCrit = critRoll(this->rng) <= PLAYER_CRIT_CHANCE;
+    const int attackDamage = isCrit
+                                 ? static_cast<int>(std::round(attackPower * PLAYER_CRIT_MULTIPLIER))
+                                 : attackPower;
 
     const Position playerCenter(playerTransform.position.x + (playerCollision.width / 2.0f),
                                 playerTransform.position.y + (playerCollision.height / 2.0f));
@@ -754,18 +763,20 @@ void Game::update(float dt) {
                          attackProfile.halfAngle)) {
         continue;
       }
-      mobHealth.current = std::max(0, mobHealth.current - attackPower);
+      mobHealth.current = std::max(0, mobHealth.current - attackDamage);
       applyPushback(*this->registry, mobEntityId, playerCenter, PUSHBACK_DISTANCE,
                     PUSHBACK_DURATION);
       this->eventBus->emitDamageEvent(
-          DamageEvent{this->playerEntityId, mobEntityId, attackPower, mobCenter});
+          DamageEvent{this->playerEntityId, mobEntityId, attackDamage, mobCenter});
       this->eventBus->emitFloatingTextEvent(
-          FloatingTextEvent{std::to_string(attackPower), mobCenter});
+          FloatingTextEvent{std::to_string(attackDamage), mobCenter,
+                            isCrit ? FloatingTextKind::CritDamage : FloatingTextKind::Damage});
       if (mobHealth.current == 0) {
         const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
         level.experience += mob.experience;
         this->eventBus->emitFloatingTextEvent(
-            FloatingTextEvent{"XP +" + std::to_string(mob.experience), mobCenter});
+            FloatingTextEvent{"XP +" + std::to_string(mob.experience), mobCenter,
+                              FloatingTextKind::Info});
         GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
         mobGraphic.color = SDL_Color({80, 80, 80, 255});
       }
@@ -848,7 +859,8 @@ void Game::update(float dt) {
             this->eventBus->emitDamageEvent(
                 DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
             this->eventBus->emitFloatingTextEvent(
-                FloatingTextEvent{"-" + std::to_string(mob.attackDamage), playerCenter});
+                FloatingTextEvent{"-" + std::to_string(mob.attackDamage), playerCenter,
+                                  FloatingTextKind::Damage});
             if (this->playerKnockbackImmunityRemaining <= 0.0f) {
               applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
                             PUSHBACK_DURATION);
@@ -878,7 +890,8 @@ void Game::update(float dt) {
       this->hasCorpse = true;
       this->corpsePosition = playerTransform.position;
       playerGraphic.color = SDL_Color({160, 200, 255, 180});
-      this->eventBus->emitFloatingTextEvent(FloatingTextEvent{"You died", playerCenter});
+      this->eventBus->emitFloatingTextEvent(
+          FloatingTextEvent{"You died", playerCenter, FloatingTextKind::Info});
     }
 
     if (this->isPlayerGhost && this->hasCorpse) {
@@ -892,7 +905,8 @@ void Game::update(float dt) {
         playerHealth.current = playerHealth.max;
         playerGraphic.color = SDL_Color({240, 240, 240, 255});
         this->playerKnockbackImmunityRemaining = 0.0f;
-        this->eventBus->emitFloatingTextEvent(FloatingTextEvent{"Resurrected", playerCenter});
+        this->eventBus->emitFloatingTextEvent(
+            FloatingTextEvent{"Resurrected", playerCenter, FloatingTextKind::Info});
       }
     }
     this->wasResurrectPressed = resurrectPressed;
