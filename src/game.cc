@@ -89,6 +89,25 @@ const char* mobTypeName(MobType type) {
   return "Mob";
 }
 
+SDL_Color lootColorForItem(const ItemDef* def) {
+  if (!def) {
+    return SDL_Color{200, 200, 200, 255};
+  }
+  switch (def->slot) {
+  case ItemSlot::Weapon:
+    return SDL_Color{240, 200, 80, 255};
+  case ItemSlot::Shield:
+    return SDL_Color{120, 180, 240, 255};
+  case ItemSlot::Shoulders:
+  case ItemSlot::Chest:
+  case ItemSlot::Pants:
+  case ItemSlot::Boots:
+  case ItemSlot::Cape:
+    return SDL_Color{120, 220, 140, 255};
+  }
+  return SDL_Color{200, 200, 200, 255};
+}
+
 int regionIndexAt(const Map& map, int tileX, int tileY) {
   const std::vector<Region>& regions = map.getRegions();
   for (std::size_t i = 0; i < regions.size(); ++i) {
@@ -325,13 +344,15 @@ void applyPushback(Registry& registry, int targetEntityId, const Position& fromP
   pushback.remaining = duration;
 }
 
-bool createLootEntity(Registry& registry, const Position& position, int itemId,
-                      std::vector<int>& lootEntityIds) {
+bool createLootEntity(Registry& registry, const ItemDatabase& database, const Position& position,
+                      int itemId, std::vector<int>& lootEntityIds) {
+  const ItemDef* def = database.getItem(itemId);
+  const SDL_Color lootColor = lootColorForItem(def);
   int entityId = registry.createEntity();
   registry.registerComponentForEntity<TransformComponent>(
       std::make_unique<TransformComponent>(position), entityId);
   registry.registerComponentForEntity<GraphicComponent>(
-      std::make_unique<GraphicComponent>(position, SDL_Color({230, 210, 80, 255})), entityId);
+      std::make_unique<GraphicComponent>(position, lootColor), entityId);
   registry.registerComponentForEntity<CollisionComponent>(
       std::make_unique<CollisionComponent>(32.0f, 32.0f, false), entityId);
   registry.registerComponentForEntity<LootComponent>(std::make_unique<LootComponent>(itemId),
@@ -497,7 +518,8 @@ Game::Game() {
         continue;
       }
       Position lootPosition(tileX * TILE_SIZE, tileY * TILE_SIZE);
-      createLootEntity(*this->registry, lootPosition, lootItems[lootIndex], this->lootEntityIds);
+      createLootEntity(*this->registry, *this->itemDatabase, lootPosition, lootItems[lootIndex],
+                       this->lootEntityIds);
       lootIndex = (lootIndex + 1) % static_cast<int>(lootItems.size());
     }
   }
@@ -996,6 +1018,107 @@ void Game::render() {
                   attackProfile.halfAngle, cameraPosition, SDL_Color{255, 255, 255, 80});
   }
 
+  { // Loot labels and pickup prompt
+    if (!this->isPlayerGhost) {
+      const TransformComponent& playerTransform =
+          this->registry->getComponent<TransformComponent>(this->playerEntityId);
+      const CollisionComponent& playerCollision =
+          this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+      const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+      const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
+      int closestLootId = -1;
+      float closestDist = pickupRangeSquared;
+      for (int lootId : this->lootEntityIds) {
+        const TransformComponent& lootTransform =
+            this->registry->getComponent<TransformComponent>(lootId);
+        const Position lootCenter(lootTransform.position.x + (TILE_SIZE / 2.0f),
+                                  lootTransform.position.y + (TILE_SIZE / 2.0f));
+        const float dist = squaredDistance(playerCenter, lootCenter);
+        if (dist <= closestDist) {
+          closestDist = dist;
+          closestLootId = lootId;
+        }
+      }
+
+      for (int lootId : this->lootEntityIds) {
+        const LootComponent& loot = this->registry->getComponent<LootComponent>(lootId);
+        const ItemDef* def = this->itemDatabase->getItem(loot.itemId);
+        if (!def) {
+          continue;
+        }
+        const TransformComponent& lootTransform =
+            this->registry->getComponent<TransformComponent>(lootId);
+        const SDL_Color labelColor = lootColorForItem(def);
+        const std::string label = def->name;
+        SDL_Surface* surface =
+            TTF_RenderText_Solid(this->font, label.c_str(), label.length(), labelColor);
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(this->renderer, surface);
+        SDL_FRect textRect = {lootTransform.position.x - cameraPosition.x - 4.0f,
+                              lootTransform.position.y - cameraPosition.y - 16.0f,
+                              static_cast<float>(surface->w), static_cast<float>(surface->h)};
+        SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
+        SDL_FRect bgRect = {textRect.x - 4.0f, textRect.y - 2.0f, textRect.w + 8.0f,
+                            textRect.h + 4.0f};
+        SDL_RenderFillRect(this->renderer, &bgRect);
+        SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
+        SDL_DestroySurface(surface);
+        SDL_DestroyTexture(texture);
+
+        if (lootId == closestLootId) {
+          const std::string prompt = "Press F to pick up " + def->name;
+          SDL_Color promptColor = {255, 245, 210, 255};
+          SDL_Surface* promptSurface =
+              TTF_RenderText_Solid(this->font, prompt.c_str(), prompt.length(), promptColor);
+          SDL_Texture* promptTexture =
+              SDL_CreateTextureFromSurface(this->renderer, promptSurface);
+          SDL_FRect promptRect = {lootTransform.position.x - cameraPosition.x - 6.0f,
+                                  lootTransform.position.y - cameraPosition.y + TILE_SIZE + 4.0f,
+                                  static_cast<float>(promptSurface->w),
+                                  static_cast<float>(promptSurface->h)};
+          SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
+          SDL_FRect promptBg = {promptRect.x - 4.0f, promptRect.y - 2.0f, promptRect.w + 8.0f,
+                                promptRect.h + 4.0f};
+          SDL_RenderFillRect(this->renderer, &promptBg);
+          SDL_RenderTexture(this->renderer, promptTexture, nullptr, &promptRect);
+          SDL_DestroySurface(promptSurface);
+          SDL_DestroyTexture(promptTexture);
+        }
+      }
+    }
+  }
+
+  if (!this->isPlayerGhost) {
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const EquipmentComponent& equipment =
+        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
+    const float cooldown = attackProfile.cooldown;
+    const float ratio =
+        (cooldown > 0.0f)
+            ? std::clamp(1.0f - (this->attackCooldownRemaining / cooldown), 0.0f, 1.0f)
+            : 1.0f;
+    SDL_FRect barBg = {playerTransform.position.x - cameraPosition.x,
+                       playerTransform.position.y - cameraPosition.y + playerCollision.height + 4.0f,
+                       playerCollision.width, 4.0f};
+    SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
+    SDL_RenderFillRect(this->renderer, &barBg);
+    SDL_FRect barFill = barBg;
+    barFill.w = barBg.w * ratio;
+    if (this->attackCooldownRemaining > 0.0f) {
+      SDL_SetRenderDrawColor(this->renderer, 230, 180, 60, 220);
+    } else {
+      SDL_SetRenderDrawColor(this->renderer, 100, 220, 120, 220);
+    }
+    SDL_RenderFillRect(this->renderer, &barFill);
+    SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 80);
+    SDL_RenderRect(this->renderer, &barBg);
+  }
+
   { // Mob HP bars
     for (int mobEntityId : this->mobEntityIds) {
       const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
@@ -1110,6 +1233,7 @@ void Game::render() {
     SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
     SDL_DestroySurface(surface);
     SDL_DestroyTexture(texture);
+
   }
 
   if (this->isPlayerGhost && this->hasCorpse) {
