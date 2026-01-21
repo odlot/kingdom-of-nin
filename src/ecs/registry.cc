@@ -11,6 +11,7 @@
 #include "ecs/component/mana_component.h"
 #include "ecs/component/mob_component.h"
 #include "ecs/component/movement_component.h"
+#include "ecs/component/projectile_component.h"
 #include "ecs/component/pushback_component.h"
 #include "ecs/component/skill_bar_component.h"
 #include "ecs/component/skill_tree_component.h"
@@ -39,6 +40,7 @@ Registry::Registry()
   registerComponent<StatsComponent>();
   registerComponent<LootComponent>();
   registerComponent<MobComponent>();
+  registerComponent<ProjectileComponent>();
   registerComponent<PushbackComponent>();
   registerComponent<BuffComponent>();
   registerComponent<SkillBarComponent>();

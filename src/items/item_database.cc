@@ -21,6 +21,26 @@ ItemDatabase::ItemDatabase() {
   basicSpear.stats.attackPower = 6;
   addItem(basicSpear);
 
+  ItemDef basicBow;
+  basicBow.id = 6;
+  basicBow.name = "Basic Bow";
+  basicBow.slot = ItemSlot::Weapon;
+  basicBow.requiredLevel = 1;
+  basicBow.allowedClasses = {CharacterClass::Archer};
+  basicBow.weaponType = WeaponType::Bow;
+  basicBow.stats.attackPower = 5;
+  addItem(basicBow);
+
+  ItemDef basicWand;
+  basicWand.id = 7;
+  basicWand.name = "Basic Wand";
+  basicWand.slot = ItemSlot::Weapon;
+  basicWand.requiredLevel = 1;
+  basicWand.allowedClasses = {CharacterClass::Mage};
+  basicWand.weaponType = WeaponType::Wand;
+  basicWand.stats.attackPower = 4;
+  addItem(basicWand);
+
   ItemDef basicShield;
   basicShield.id = 2;
   basicShield.name = "Basic Shield";

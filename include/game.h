@@ -62,9 +62,9 @@ private:
   int playerEntityId = -1;
   std::vector<int> mobEntityIds;
   std::vector<int> lootEntityIds;
+  std::vector<int> projectileEntityIds;
   float attackCooldownRemaining = 0.0f;
   std::array<bool, 5> wasSkillPressed = {false, false, false, false, false};
-  bool wasAttackPressed = false;
   bool wasPickupPressed = false;
   bool wasResurrectPressed = false;
   bool wasDebugPressed = false;
@@ -72,10 +72,12 @@ private:
   int lastRegionIndex = -1;
   float playerHitFlashTimer = 0.0f;
   float playerKnockbackImmunityRemaining = 0.0f;
-  int facingX = 0;
-  int facingY = 1;
+  float facingX = 0.0f;
+  float facingY = 1.0f;
+  float facingAngle = 1.5707964f;
   bool isPlayerGhost = false;
   bool hasCorpse = false;
   Position corpsePosition = Position(0.0f, 0.0f);
+  int currentAutoTargetId = -1;
   std::mt19937 rng;
 };

@@ -7,7 +7,7 @@ enum class ItemSlot { Weapon = 0, Shield, Shoulders, Chest, Pants, Boots, Cape }
 
 enum class CharacterClass { Any = 0, Warrior, Mage, Archer, Rogue };
 
-enum class WeaponType { None = 0, OneHandedSword, TwoHandedSword, Polearm, Spear };
+enum class WeaponType { None = 0, OneHandedSword, TwoHandedSword, Polearm, Spear, Bow, Wand };
 
 struct ItemStats {
   int attackPower = 0;

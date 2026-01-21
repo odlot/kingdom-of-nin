@@ -29,6 +29,7 @@ target_sources(ecs
       ${CMAKE_SOURCE_DIR}/include/ecs/component/mana_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/mob_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/movement_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/projectile_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/pushback_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/skill_bar_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/skill_tree_component.h

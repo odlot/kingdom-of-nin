@@ -10,6 +10,7 @@
 #include "ecs/component/mana_component.h"
 #include "ecs/component/mob_component.h"
 #include "ecs/component/movement_component.h"
+#include "ecs/component/projectile_component.h"
 #include "ecs/component/pushback_component.h"
 #include "ecs/component/skill_bar_component.h"
 #include "ecs/component/skill_tree_component.h"
@@ -45,9 +46,11 @@ constexpr int MINIMAP_HEIGHT = 120;
 constexpr int MINIMAP_MARGIN = 12;
 constexpr float ATTACK_RANGE = 56.0f;
 constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
+constexpr float AUTO_TARGET_RANGE_MULTIPLIER = 2.0f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
 constexpr float PLAYER_CRIT_CHANCE = 0.12f;
 constexpr float PLAYER_CRIT_MULTIPLIER = 1.5f;
+constexpr float FACING_TURN_SPEED = 8.0f;
 constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
 constexpr float PUSHBACK_DURATION = 0.2f;
 constexpr float PLAYER_KNOCKBACK_IMMUNITY_SECONDS = 2.0f;
@@ -89,6 +92,17 @@ const char* mobTypeName(MobType type) {
     return "Goblin Brute";
   }
   return "Mob";
+}
+
+float shortestAngleDiff(float from, float to) {
+  constexpr float kPi = 3.14159265f;
+  float diff = std::fmod(to - from, 2.0f * kPi);
+  if (diff > kPi) {
+    diff -= 2.0f * kPi;
+  } else if (diff < -kPi) {
+    diff += 2.0f * kPi;
+  }
+  return diff;
 }
 
 SDL_Color lootColorForItem(const ItemDef* def) {
@@ -138,10 +152,11 @@ void drawCircle(SDL_Renderer* renderer, const Position& center, float radius,
   }
 }
 
-void drawFacingArc(SDL_Renderer* renderer, const Position& center, float radius, int facingX,
-                   int facingY, float halfAngle, const Position& cameraPosition, SDL_Color color) {
-  float fx = static_cast<float>(facingX);
-  float fy = static_cast<float>(facingY);
+void drawFacingArc(SDL_Renderer* renderer, const Position& center, float radius, float facingX,
+                   float facingY, float halfAngle, const Position& cameraPosition,
+                   SDL_Color color) {
+  float fx = facingX;
+  float fy = facingY;
   const float facingLength = std::sqrt((fx * fx) + (fy * fy));
   if (facingLength <= 0.001f) {
     fx = 0.0f;
@@ -194,7 +209,7 @@ float squaredDistance(const Position& a, const Position& b) {
   return (dx * dx) + (dy * dy);
 }
 
-bool isInFacingArc(const Position& origin, const Position& target, int facingX, int facingY,
+bool isInFacingArc(const Position& origin, const Position& target, float facingX, float facingY,
                    float halfAngle) {
   const float dx = target.x - origin.x;
   const float dy = target.y - origin.y;
@@ -202,16 +217,14 @@ bool isInFacingArc(const Position& origin, const Position& target, int facingX, 
   if (length <= 0.001f) {
     return true;
   }
-  const float fx = static_cast<float>(facingX);
-  const float fy = static_cast<float>(facingY);
-  const float facingLength = std::sqrt((fx * fx) + (fy * fy));
+  const float facingLength = std::sqrt((facingX * facingX) + (facingY * facingY));
   if (facingLength <= 0.001f) {
     return true;
   }
   const float nx = dx / length;
   const float ny = dy / length;
-  const float fnx = fx / facingLength;
-  const float fny = fy / facingLength;
+  const float fnx = facingX / facingLength;
+  const float fny = facingY / facingLength;
   const float dot = (nx * fnx) + (ny * fny);
   return dot >= std::cos(halfAngle);
 }
@@ -220,6 +233,10 @@ struct AttackProfile {
   float range = ATTACK_RANGE;
   float halfAngle = 0.75f;
   float cooldown = ATTACK_COOLDOWN_SECONDS;
+  bool isRanged = false;
+  float projectileSpeed = 0.0f;
+  float projectileRadius = 0.0f;
+  SDL_Color projectileColor = {255, 255, 255, 255};
 };
 
 void applyOrRefreshBuff(BuffComponent& buffs, int buffId, const std::string& name, float duration) {
@@ -274,6 +291,24 @@ AttackProfile attackProfileForWeapon(const EquipmentComponent& equipment,
     profile.halfAngle = 0.5f;
     profile.range = ATTACK_RANGE * 1.4f;
     profile.cooldown = 0.7f;
+    break;
+  case WeaponType::Bow:
+    profile.halfAngle = 0.35f;
+    profile.range = ATTACK_RANGE * 3.6f;
+    profile.cooldown = 0.9f;
+    profile.isRanged = true;
+    profile.projectileSpeed = 220.0f;
+    profile.projectileRadius = 9.0f;
+    profile.projectileColor = SDL_Color{255, 220, 120, 255};
+    break;
+  case WeaponType::Wand:
+    profile.halfAngle = 0.4f;
+    profile.range = ATTACK_RANGE * 3.0f;
+    profile.cooldown = 0.8f;
+    profile.isRanged = true;
+    profile.projectileSpeed = 200.0f;
+    profile.projectileRadius = 10.0f;
+    profile.projectileColor = SDL_Color{140, 200, 255, 255};
     break;
   case WeaponType::None:
     profile.halfAngle = 0.65f;
@@ -361,6 +396,22 @@ bool createLootEntity(Registry& registry, const ItemDatabase& database, const Po
                                                      entityId);
   lootEntityIds.push_back(entityId);
   return true;
+}
+
+int createProjectileEntity(Registry& registry, const Position& position, float velocityX,
+                           float velocityY, float range, int sourceEntityId, int targetEntityId,
+                           int damage, bool isCrit, float radius, SDL_Color color,
+                           std::vector<int>& projectileEntityIds) {
+  int entityId = registry.createEntity();
+  registry.registerComponentForEntity<TransformComponent>(
+      std::make_unique<TransformComponent>(position), entityId);
+  auto projectile = std::make_unique<ProjectileComponent>(
+      sourceEntityId, targetEntityId, velocityX, velocityY, range, damage, isCrit, radius, color);
+  projectile->lastX = position.x;
+  projectile->lastY = position.y;
+  registry.registerComponentForEntity<ProjectileComponent>(std::move(projectile), entityId);
+  projectileEntityIds.push_back(entityId);
+  return entityId;
 }
 
 bool isBlockedByMap(const Map& map, const CollisionComponent& collision, float nextX, float nextY) {
@@ -509,7 +560,7 @@ Game::Game() {
   }
 
   { // Spawn loot items near the starting zone
-    const std::array<int, 5> lootItems = {1, 2, 3, 4, 5};
+    const std::array<int, 7> lootItems = {1, 2, 3, 4, 5, 6, 7};
     const std::array<std::pair<int, int>, 6> offsets = {
         std::make_pair(-2, 0), std::make_pair(2, 0),   std::make_pair(0, -2),
         std::make_pair(0, 2),  std::make_pair(-3, -1), std::make_pair(3, 1)};
@@ -587,12 +638,7 @@ void Game::update(float dt) {
     x = 1;
   }
   auto result = std::make_pair(x, y);
-  if (x != 0 || y != 0) {
-    this->facingX = x;
-    this->facingY = y;
-  }
 
-  const bool attackPressed = keyboardState[SDL_SCANCODE_SPACE];
   const bool pickupPressed = keyboardState[SDL_SCANCODE_F];
   const bool debugPressed = keyboardState[SDL_SCANCODE_D];
   const bool resurrectPressed = keyboardState[SDL_SCANCODE_R];
@@ -721,8 +767,157 @@ void Game::update(float dt) {
     this->showDebugMobRanges = !this->showDebugMobRanges;
   }
   this->wasDebugPressed = debugPressed;
-  if (!this->isPlayerGhost && attackPressed && !this->wasAttackPressed &&
-      this->attackCooldownRemaining <= 0.0f) {
+
+  {
+    if (this->isPlayerGhost) {
+      this->currentAutoTargetId = -1;
+    } else {
+      const TransformComponent& playerTransform =
+          this->registry->getComponent<TransformComponent>(this->playerEntityId);
+      const CollisionComponent& playerCollision =
+          this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+      const EquipmentComponent& equipment =
+          this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+      const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
+      const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+      const float range = attackProfile.range * AUTO_TARGET_RANGE_MULTIPLIER;
+      const float rangeSquared = range * range;
+      int closestMobId = -1;
+      float closestDist = rangeSquared;
+      Position closestCenter;
+      for (int mobEntityId : this->mobEntityIds) {
+        const HealthComponent& mobHealth =
+            this->registry->getComponent<HealthComponent>(mobEntityId);
+        if (mobHealth.current <= 0) {
+          continue;
+        }
+        if (this->respawnSystem->isSpawning(mobEntityId)) {
+          continue;
+        }
+        const TransformComponent& mobTransform =
+            this->registry->getComponent<TransformComponent>(mobEntityId);
+        const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
+                                 mobTransform.position.y + (TILE_SIZE / 2.0f));
+        const float dist = squaredDistance(playerCenter, mobCenter);
+        if (dist <= closestDist) {
+          closestDist = dist;
+          closestMobId = mobEntityId;
+          closestCenter = mobCenter;
+        }
+      }
+
+      this->currentAutoTargetId = closestMobId;
+      float desiredAngle = this->facingAngle;
+      bool hasFacingTarget = false;
+      if (closestMobId != -1) {
+        desiredAngle = std::atan2(closestCenter.y - playerCenter.y,
+                                  closestCenter.x - playerCenter.x);
+        hasFacingTarget = true;
+      } else if (x != 0 || y != 0) {
+        desiredAngle = std::atan2(static_cast<float>(y), static_cast<float>(x));
+        hasFacingTarget = true;
+      }
+      if (hasFacingTarget) {
+        const float diff = shortestAngleDiff(this->facingAngle, desiredAngle);
+        const float maxStep = FACING_TURN_SPEED * dt;
+        if (std::abs(diff) <= maxStep) {
+          this->facingAngle = desiredAngle;
+        } else {
+          this->facingAngle += (diff > 0.0f ? maxStep : -maxStep);
+        }
+        this->facingX = std::cos(this->facingAngle);
+        this->facingY = std::sin(this->facingAngle);
+      }
+    }
+  }
+
+  auto applyPlayerDamageToMob = [&](int mobEntityId, int damage, bool isCrit,
+                                    const Position& hitPosition, const Position& fromPosition) {
+    if (mobEntityId == -1) {
+      return;
+    }
+    HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
+    if (mobHealth.current <= 0 || this->respawnSystem->isSpawning(mobEntityId)) {
+      return;
+    }
+    mobHealth.current = std::max(0, mobHealth.current - damage);
+    applyPushback(*this->registry, mobEntityId, fromPosition, PUSHBACK_DISTANCE, PUSHBACK_DURATION);
+    this->eventBus->emitDamageEvent(
+        DamageEvent{this->playerEntityId, mobEntityId, damage, hitPosition});
+    this->eventBus->emitFloatingTextEvent(
+        FloatingTextEvent{std::to_string(damage), hitPosition,
+                          isCrit ? FloatingTextKind::CritDamage : FloatingTextKind::Damage});
+    if (mobHealth.current == 0) {
+      LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+      level.experience += mob.experience;
+      this->eventBus->emitFloatingTextEvent(
+          FloatingTextEvent{"XP +" + std::to_string(mob.experience), hitPosition,
+                            FloatingTextKind::Info});
+      GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
+      mobGraphic.color = SDL_Color({80, 80, 80, 255});
+    }
+  };
+
+  {
+    for (std::size_t i = 0; i < this->projectileEntityIds.size();) {
+      const int projectileId = this->projectileEntityIds[i];
+      TransformComponent& projectileTransform =
+          this->registry->getComponent<TransformComponent>(projectileId);
+      ProjectileComponent& projectile =
+          this->registry->getComponent<ProjectileComponent>(projectileId);
+      bool shouldRemove = false;
+
+      projectile.lastX = projectileTransform.position.x;
+      projectile.lastY = projectileTransform.position.y;
+      const float dx = projectile.velocityX * dt;
+      const float dy = projectile.velocityY * dt;
+      projectileTransform.position.x += dx;
+      projectileTransform.position.y += dy;
+      projectile.remainingRange =
+          std::max(0.0f, projectile.remainingRange - std::sqrt((dx * dx) + (dy * dy)));
+
+      const int tileX = static_cast<int>(projectileTransform.position.x / TILE_SIZE);
+      const int tileY = static_cast<int>(projectileTransform.position.y / TILE_SIZE);
+      if (!this->map->isWalkable(tileX, tileY) || projectile.remainingRange <= 0.0f) {
+        shouldRemove = true;
+      }
+
+      if (!shouldRemove && projectile.targetEntityId != -1) {
+        const HealthComponent& mobHealth =
+            this->registry->getComponent<HealthComponent>(projectile.targetEntityId);
+        if (mobHealth.current <= 0 || this->respawnSystem->isSpawning(projectile.targetEntityId)) {
+          shouldRemove = true;
+        } else {
+          const TransformComponent& mobTransform =
+              this->registry->getComponent<TransformComponent>(projectile.targetEntityId);
+          const CollisionComponent& mobCollision =
+              this->registry->getComponent<CollisionComponent>(projectile.targetEntityId);
+          const Position mobCenter = centerForEntity(mobTransform, mobCollision);
+          const float radius = (mobCollision.width / 2.0f) + projectile.radius;
+          if (squaredDistance(projectileTransform.position, mobCenter) <= radius * radius) {
+            const TransformComponent& playerTransform =
+                this->registry->getComponent<TransformComponent>(this->playerEntityId);
+            const CollisionComponent& playerCollision =
+                this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+            const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+            applyPlayerDamageToMob(projectile.targetEntityId, projectile.damage,
+                                   projectile.isCrit, mobCenter, playerCenter);
+            shouldRemove = true;
+          }
+        }
+      }
+
+      if (shouldRemove) {
+        projectileTransform.position = Position(-1000.0f, -1000.0f);
+        this->projectileEntityIds.erase(this->projectileEntityIds.begin() + i);
+      } else {
+        ++i;
+      }
+    }
+  }
+
+  if (!this->isPlayerGhost && this->attackCooldownRemaining <= 0.0f) {
     const TransformComponent& playerTransform =
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
     const CollisionComponent& playerCollision =
@@ -731,7 +926,6 @@ void Game::update(float dt) {
         this->registry->getComponent<StatsComponent>(this->playerEntityId);
     const EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
     const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
     const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
     std::uniform_real_distribution<float> critRoll(0.0f, 1.0f);
@@ -740,51 +934,41 @@ void Game::update(float dt) {
                                  ? static_cast<int>(std::round(attackPower * PLAYER_CRIT_MULTIPLIER))
                                  : attackPower;
 
-    const Position playerCenter(playerTransform.position.x + (playerCollision.width / 2.0f),
-                                playerTransform.position.y + (playerCollision.height / 2.0f));
-    const float rangeSquared = attackProfile.range * attackProfile.range;
-
-    for (int mobEntityId : this->mobEntityIds) {
-      HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
-      if (mobHealth.current <= 0) {
-        continue;
-      }
-      if (this->respawnSystem->isSpawning(mobEntityId)) {
-        continue;
-      }
+    if (this->currentAutoTargetId != -1) {
       const TransformComponent& mobTransform =
-          this->registry->getComponent<TransformComponent>(mobEntityId);
+          this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
       const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
                                mobTransform.position.y + (TILE_SIZE / 2.0f));
-      if (squaredDistance(playerCenter, mobCenter) > rangeSquared) {
-        continue;
-      }
-      if (!isInFacingArc(playerCenter, mobCenter, this->facingX, this->facingY,
-                         attackProfile.halfAngle)) {
-        continue;
-      }
-      mobHealth.current = std::max(0, mobHealth.current - attackDamage);
-      applyPushback(*this->registry, mobEntityId, playerCenter, PUSHBACK_DISTANCE,
-                    PUSHBACK_DURATION);
-      this->eventBus->emitDamageEvent(
-          DamageEvent{this->playerEntityId, mobEntityId, attackDamage, mobCenter});
-      this->eventBus->emitFloatingTextEvent(
-          FloatingTextEvent{std::to_string(attackDamage), mobCenter,
-                            isCrit ? FloatingTextKind::CritDamage : FloatingTextKind::Damage});
-      if (mobHealth.current == 0) {
-        const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
-        level.experience += mob.experience;
-        this->eventBus->emitFloatingTextEvent(
-            FloatingTextEvent{"XP +" + std::to_string(mob.experience), mobCenter,
-                              FloatingTextKind::Info});
-        GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
-        mobGraphic.color = SDL_Color({80, 80, 80, 255});
+      const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+      const float rangeSquared = attackProfile.range * attackProfile.range;
+      if (squaredDistance(playerCenter, mobCenter) <= rangeSquared) {
+        if (attackProfile.isRanged) {
+          float dx = mobCenter.x - playerCenter.x;
+          float dy = mobCenter.y - playerCenter.y;
+          const float length = std::sqrt((dx * dx) + (dy * dy));
+          if (length > 0.001f) {
+            dx /= length;
+            dy /= length;
+            const float spawnOffset =
+                (playerCollision.width / 2.0f) + attackProfile.projectileRadius + 4.0f;
+            const Position spawnPosition(playerCenter.x + (dx * spawnOffset),
+                                         playerCenter.y + (dy * spawnOffset));
+            createProjectileEntity(*this->registry, spawnPosition,
+                                   dx * attackProfile.projectileSpeed,
+                                   dy * attackProfile.projectileSpeed, attackProfile.range,
+                                   this->playerEntityId, this->currentAutoTargetId, attackDamage,
+                                   isCrit, attackProfile.projectileRadius,
+                                   attackProfile.projectileColor, this->projectileEntityIds);
+            this->attackCooldownRemaining = attackProfile.cooldown;
+          }
+        } else {
+          applyPlayerDamageToMob(this->currentAutoTargetId, attackDamage, isCrit, mobCenter,
+                                 playerCenter);
+          this->attackCooldownRemaining = attackProfile.cooldown;
+        }
       }
     }
-
-    this->attackCooldownRemaining = attackProfile.cooldown;
   }
-  this->wasAttackPressed = attackPressed;
 
   // spdlog::get("console")->info("Input direction: ({}, {})", result.first,
   //                               result.second);
@@ -981,10 +1165,39 @@ void Game::render() {
       }
     }
   }
+
   for (auto it = this->registry->systemsBegin(); it != this->registry->systemsEnd(); ++it) {
     GraphicSystem* graphicSystem = dynamic_cast<GraphicSystem*>((*it).get());
     if (graphicSystem) {
       graphicSystem->render(this->renderer, cameraPosition);
+    }
+  }
+
+  { // Projectiles (drawn after entities so they stay visible)
+    SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+    for (int projectileId : this->projectileEntityIds) {
+      const TransformComponent& projectileTransform =
+          this->registry->getComponent<TransformComponent>(projectileId);
+      const ProjectileComponent& projectile =
+          this->registry->getComponent<ProjectileComponent>(projectileId);
+      const float size = projectile.radius * 2.0f;
+      SDL_FRect projectileRect = {projectileTransform.position.x - projectile.radius -
+                                      cameraPosition.x,
+                                  projectileTransform.position.y - projectile.radius -
+                                      cameraPosition.y,
+                                  size, size};
+      SDL_SetRenderDrawColor(this->renderer, projectile.color.r, projectile.color.g,
+                             projectile.color.b, projectile.color.a);
+      SDL_RenderFillRect(this->renderer, &projectileRect);
+      SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 200);
+      SDL_RenderLine(this->renderer, projectile.lastX - cameraPosition.x,
+                     projectile.lastY - cameraPosition.y,
+                     projectileTransform.position.x - cameraPosition.x,
+                     projectileTransform.position.y - cameraPosition.y);
+      drawCircle(this->renderer, projectileTransform.position, projectile.radius + 2.0f,
+                 cameraPosition, SDL_Color{255, 255, 255, 200});
+      SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 200);
+      SDL_RenderRect(this->renderer, &projectileRect);
     }
   }
 
@@ -1032,10 +1245,30 @@ void Game::render() {
                   attackProfile.halfAngle, cameraPosition, SDL_Color{255, 255, 255, 80});
   }
 
+  { // Auto-attack target ring
+    if (this->currentAutoTargetId != -1) {
+      const HealthComponent& mobHealth =
+          this->registry->getComponent<HealthComponent>(this->currentAutoTargetId);
+      if (mobHealth.current > 0 &&
+          !this->respawnSystem->isSpawning(this->currentAutoTargetId)) {
+        const TransformComponent& mobTransform =
+            this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
+        const CollisionComponent& mobCollision =
+            this->registry->getComponent<CollisionComponent>(this->currentAutoTargetId);
+        const Position mobCenter = centerForEntity(mobTransform, mobCollision);
+        SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+        drawCircle(this->renderer, mobCenter, (mobCollision.width / 2.0f) + 6.0f,
+                   cameraPosition, SDL_Color{255, 230, 120, 220});
+        drawCircle(this->renderer, mobCenter, (mobCollision.width / 2.0f) + 3.0f,
+                   cameraPosition, SDL_Color{255, 255, 255, 140});
+      }
+    }
+  }
+
   { // Loot labels and pickup prompt
     if (!this->isPlayerGhost) {
       const TransformComponent& playerTransform =
-          this->registry->getComponent<TransformComponent>(this->playerEntityId);
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
       const CollisionComponent& playerCollision =
           this->registry->getComponent<CollisionComponent>(this->playerEntityId);
       const Position playerCenter = centerForEntity(playerTransform, playerCollision);
