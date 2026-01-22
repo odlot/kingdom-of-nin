@@ -5,7 +5,7 @@
 
 namespace {
 constexpr float STATS_PANEL_WIDTH = 260.0f;
-constexpr float STATS_PANEL_HEIGHT = 220.0f;
+constexpr float STATS_PANEL_HEIGHT = 236.0f;
 constexpr float LINE_HEIGHT = 16.0f;
 constexpr float TITLE_Y_OFFSET = 6.0f;
 constexpr float LIST_Y_OFFSET = 28.0f;
@@ -73,8 +73,9 @@ void CharacterStats::handleInput(int mouseX, int mouseY, bool mousePressed,
 
 void CharacterStats::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth,
                             const HealthComponent& health, const ManaComponent& mana,
-                            const LevelComponent& level, int attackPower, int strength,
-                            int dexterity, int intellect, int luck, int unspentPoints,
+                            const LevelComponent& level, int attackPower,
+                            const std::string& className, int strength, int gold, int dexterity,
+                            int intellect, int luck, int unspentPoints,
                             bool isVisible) const {
   if (!isVisible) {
     return;
@@ -96,13 +97,14 @@ void CharacterStats::render(SDL_Renderer* renderer, TTF_Font* font, int windowWi
   SDL_DestroySurface(titleSurface);
   SDL_DestroyTexture(titleTexture);
 
-  const std::array<std::string, 11> lines = {
+  const std::array<std::string, 12> lines = {
       "Level: " + std::to_string(level.level),
       "HP: " + std::to_string(health.current) + "/" + std::to_string(health.max),
       "MP: " + std::to_string(mana.current) + "/" + std::to_string(mana.max),
       "AP: " + std::to_string(attackPower),
+      "Gold: " + std::to_string(gold),
       "XP: " + std::to_string(level.experience) + "/" + std::to_string(level.nextLevelExperience),
-      "Class: Adventurer",
+      "Class: " + className,
       "STR: " + std::to_string(strength),
       "DEX: " + std::to_string(dexterity),
       "INT: " + std::to_string(intellect),

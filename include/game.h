@@ -22,8 +22,11 @@
 #include "ui/floating_text_system.h"
 #include "ui/inventory.h"
 #include "ui/minimap.h"
+#include "ui/quest_log.h"
 #include "ui/skill_bar.h"
 #include "ui/skill_tree.h"
+#include "quests/quest_database.h"
+#include "quests/quest_system.h"
 #include "world/map.h"
 
 const int WINDOW_WIDTH = 640;
@@ -47,9 +50,12 @@ private:
   std::unique_ptr<Inventory> inventoryUi;
   std::unique_ptr<CharacterStats> characterStats;
   std::unique_ptr<Minimap> minimap;
+  std::unique_ptr<QuestLog> questLogUi;
   std::unique_ptr<ItemDatabase> itemDatabase;
   std::unique_ptr<SkillDatabase> skillDatabase;
   std::unique_ptr<SkillTreeDefinition> skillTreeDefinition;
+  std::unique_ptr<QuestDatabase> questDatabase;
+  std::unique_ptr<QuestSystem> questSystem;
   std::unique_ptr<EventBus> eventBus;
   std::unique_ptr<FloatingTextSystem> floatingTextSystem;
   std::unique_ptr<RespawnSystem> respawnSystem;
@@ -63,11 +69,19 @@ private:
   std::vector<int> mobEntityIds;
   std::vector<int> lootEntityIds;
   std::vector<int> projectileEntityIds;
+  std::vector<int> npcEntityIds;
+  std::vector<int> shopNpcIds;
   float attackCooldownRemaining = 0.0f;
   std::array<bool, 5> wasSkillPressed = {false, false, false, false, false};
   bool wasPickupPressed = false;
+  bool wasInteractPressed = false;
   bool wasResurrectPressed = false;
   bool wasDebugPressed = false;
+  bool wasQuestLogPressed = false;
+  bool wasAcceptQuestPressed = false;
+  bool wasTurnInQuestPressed = false;
+  bool wasQuestPrevPressed = false;
+  bool wasQuestNextPressed = false;
   bool showDebugMobRanges = false;
   int lastRegionIndex = -1;
   float playerHitFlashTimer = 0.0f;
@@ -79,5 +93,18 @@ private:
   bool hasCorpse = false;
   Position corpsePosition = Position(0.0f, 0.0f);
   int currentAutoTargetId = -1;
+  int currentNpcId = -1;
+  int activeNpcId = -1;
+  int activeNpcQuestSelection = 0;
+  bool shopOpen = false;
+  bool questLogVisible = false;
+  float questLogScroll = 0.0f;
+  std::string shopNotice;
+  float shopNoticeTimer = 0.0f;
+  float shopScroll = 0.0f;
+  float inventoryScroll = 0.0f;
+  float npcDialogScroll = 0.0f;
+  float mouseWheelDelta = 0.0f;
+  bool wasMousePressed = false;
   std::mt19937 rng;
 };

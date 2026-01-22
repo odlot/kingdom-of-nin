@@ -20,6 +20,7 @@ add_subdirectory(ecs)
 add_subdirectory(ui)
 add_subdirectory(events)
 add_subdirectory(skills)
+add_subdirectory(quests)
 
 add_library(game)
 
@@ -38,5 +39,5 @@ target_sources(game
       ${CMAKE_SOURCE_DIR}/include/camera.h
 )
 
-target_link_libraries(game PUBLIC SDL3_ttf::SDL3_ttf SDL3::SDL3 world ui items events skills
+target_link_libraries(game PUBLIC SDL3_ttf::SDL3_ttf SDL3::SDL3 world ui items events skills quests
                            PRIVATE ecs spdlog::spdlog)

@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "ecs/component/mob_component.h"
 #include "ecs/position.h"
 
 struct DamageEvent {
@@ -25,4 +26,14 @@ struct RegionEvent {
   RegionTransition transition;
   std::string regionName;
   Position position;
+};
+
+struct MobKilledEvent {
+  MobType mobType = MobType::Goblin;
+  int mobEntityId = -1;
+};
+
+struct ItemPickupEvent {
+  int itemId = 0;
+  int amount = 1;
 };

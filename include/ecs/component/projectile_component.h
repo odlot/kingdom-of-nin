@@ -7,7 +7,7 @@ class ProjectileComponent : public Component {
 public:
   ProjectileComponent(int sourceEntityId, int targetEntityId, float velocityX, float velocityY,
                       float remainingRange, int damage, bool isCrit, float radius,
-                      SDL_Color color)
+                      float trailLength, SDL_Color color)
       : sourceEntityId(sourceEntityId),
         targetEntityId(targetEntityId),
         velocityX(velocityX),
@@ -16,6 +16,7 @@ public:
         damage(damage),
         isCrit(isCrit),
         radius(radius),
+        trailLength(trailLength),
         color(color) {}
 
   int sourceEntityId = -1;
@@ -28,5 +29,6 @@ public:
   int damage = 0;
   bool isCrit = false;
   float radius = 4.0f;
+  float trailLength = 0.0f;
   SDL_Color color = {255, 255, 255, 255};
 };

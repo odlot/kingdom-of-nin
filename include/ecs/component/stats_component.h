@@ -11,4 +11,5 @@ public:
   int intellect = 5;
   int luck = 5;
   int unspentPoints = 0;
+  int gold = 50;
 };

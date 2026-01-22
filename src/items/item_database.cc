@@ -9,6 +9,7 @@ ItemDatabase::ItemDatabase() {
   basicSword.allowedClasses = {CharacterClass::Any};
   basicSword.weaponType = WeaponType::OneHandedSword;
   basicSword.stats.attackPower = 5;
+  basicSword.price = 20;
   addItem(basicSword);
 
   ItemDef basicSpear;
@@ -19,6 +20,7 @@ ItemDatabase::ItemDatabase() {
   basicSpear.allowedClasses = {CharacterClass::Any};
   basicSpear.weaponType = WeaponType::Spear;
   basicSpear.stats.attackPower = 6;
+  basicSpear.price = 24;
   addItem(basicSpear);
 
   ItemDef basicBow;
@@ -29,6 +31,10 @@ ItemDatabase::ItemDatabase() {
   basicBow.allowedClasses = {CharacterClass::Archer};
   basicBow.weaponType = WeaponType::Bow;
   basicBow.stats.attackPower = 5;
+  basicBow.projectile.speed = 220.0f;
+  basicBow.projectile.radius = 9.0f;
+  basicBow.projectile.trailLength = 22.0f;
+  basicBow.price = 30;
   addItem(basicBow);
 
   ItemDef basicWand;
@@ -39,7 +45,22 @@ ItemDatabase::ItemDatabase() {
   basicWand.allowedClasses = {CharacterClass::Mage};
   basicWand.weaponType = WeaponType::Wand;
   basicWand.stats.attackPower = 4;
+  basicWand.projectile.speed = 200.0f;
+  basicWand.projectile.radius = 10.0f;
+  basicWand.projectile.trailLength = 26.0f;
+  basicWand.price = 28;
   addItem(basicWand);
+
+  ItemDef basicDagger;
+  basicDagger.id = 8;
+  basicDagger.name = "Basic Dagger";
+  basicDagger.slot = ItemSlot::Weapon;
+  basicDagger.requiredLevel = 1;
+  basicDagger.allowedClasses = {CharacterClass::Rogue};
+  basicDagger.weaponType = WeaponType::Dagger;
+  basicDagger.stats.attackPower = 4;
+  basicDagger.price = 18;
+  addItem(basicDagger);
 
   ItemDef basicShield;
   basicShield.id = 2;
@@ -48,6 +69,7 @@ ItemDatabase::ItemDatabase() {
   basicShield.requiredLevel = 1;
   basicShield.allowedClasses = {CharacterClass::Any};
   basicShield.stats.armor = 3;
+  basicShield.price = 16;
   addItem(basicShield);
 
   ItemDef basicBoots;
@@ -57,6 +79,7 @@ ItemDatabase::ItemDatabase() {
   basicBoots.requiredLevel = 1;
   basicBoots.allowedClasses = {CharacterClass::Any};
   basicBoots.stats.armor = 1;
+  basicBoots.price = 12;
   addItem(basicBoots);
 
   ItemDef basicChest;
@@ -66,6 +89,7 @@ ItemDatabase::ItemDatabase() {
   basicChest.requiredLevel = 1;
   basicChest.allowedClasses = {CharacterClass::Any};
   basicChest.stats.armor = 2;
+  basicChest.price = 22;
   addItem(basicChest);
 }
 

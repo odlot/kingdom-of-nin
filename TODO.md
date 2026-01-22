@@ -15,6 +15,8 @@
 - Warrior, Mage, Archer, Rogue class (start with one to validate combat feel)
 - Skill system
 - Stat system
+- Move attack tuning (range, arc, cooldown, projectile feel) from weapon type defaults to per-weapon attributes
+- Start as Adventurer and unlock class choice at level 10
 - Primary statistics like intellect (INT), strength (STR), luck (LUK), and dexterity (DEX)
   - Things like INT influence Mana, STR influences HP, Luck influences Critical Chance / Damage, DEX influences Accuracy and Dodge / Evasion
   - Attribute component?

@@ -5,7 +5,7 @@ Minimap::Minimap(int width, int height, int margin)
     : width(width), height(height), margin(margin) {}
 
 void Minimap::render(SDL_Renderer* renderer, const Map& map, const Position& playerPosition,
-                     int windowWidth, int windowHeight) {
+                     int windowWidth, int windowHeight, const std::vector<MinimapMarker>& markers) {
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
   const float mapWidth = static_cast<float>(map.getWidth());
@@ -54,6 +54,14 @@ void Minimap::render(SDL_Renderer* renderer, const Map& map, const Position& pla
   SDL_FRect playerDot = {originX + (playerTileX * scaleX) - 2.0f,
                          originY + (playerTileY * scaleY) - 2.0f, 4.0f, 4.0f};
   SDL_RenderFillRect(renderer, &playerDot);
+
+  for (const MinimapMarker& marker : markers) {
+    SDL_SetRenderDrawColor(renderer, marker.color.r, marker.color.g, marker.color.b,
+                           marker.color.a);
+    SDL_FRect dot = {originX + (marker.tileX * scaleX) - 2.0f,
+                     originY + (marker.tileY * scaleY) - 2.0f, 4.0f, 4.0f};
+    SDL_RenderFillRect(renderer, &dot);
+  }
 
   SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200);
   SDL_FRect border = {originX - 4.0f, originY - 4.0f, static_cast<float>(width + 8),

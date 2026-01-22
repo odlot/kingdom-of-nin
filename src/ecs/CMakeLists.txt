@@ -21,6 +21,7 @@ target_sources(ecs
       ${CMAKE_SOURCE_DIR}/include/ecs/system/pushback_system.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/buff_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/class_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/collision_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/health_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/inventory_component.h
@@ -29,7 +30,10 @@ target_sources(ecs
       ${CMAKE_SOURCE_DIR}/include/ecs/component/mana_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/mob_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/movement_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/npc_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/projectile_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/shop_component.h
+      ${CMAKE_SOURCE_DIR}/include/ecs/component/quest_log_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/pushback_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/skill_bar_component.h
       ${CMAKE_SOURCE_DIR}/include/ecs/component/skill_tree_component.h

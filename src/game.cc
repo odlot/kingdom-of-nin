@@ -1,5 +1,6 @@
 #include "game.h"
 #include "ecs/component/buff_component.h"
+#include "ecs/component/class_component.h"
 #include "ecs/component/collision_component.h"
 #include "ecs/component/equipment_component.h"
 #include "ecs/component/graphic_component.h"
@@ -10,7 +11,10 @@
 #include "ecs/component/mana_component.h"
 #include "ecs/component/mob_component.h"
 #include "ecs/component/movement_component.h"
+#include "ecs/component/npc_component.h"
 #include "ecs/component/projectile_component.h"
+#include "ecs/component/quest_log_component.h"
+#include "ecs/component/shop_component.h"
 #include "ecs/component/pushback_component.h"
 #include "ecs/component/skill_bar_component.h"
 #include "ecs/component/skill_tree_component.h"
@@ -39,6 +43,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <sstream>
+#include <vector>
 
 constexpr std::string WINDOW_TITLE = "Kingdom of Nin";
 constexpr int MINIMAP_WIDTH = 160;
@@ -48,6 +53,7 @@ constexpr float ATTACK_RANGE = 56.0f;
 constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
 constexpr float AUTO_TARGET_RANGE_MULTIPLIER = 2.0f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
+constexpr float NPC_INTERACT_RANGE = 52.0f;
 constexpr float PLAYER_CRIT_CHANCE = 0.12f;
 constexpr float PLAYER_CRIT_MULTIPLIER = 1.5f;
 constexpr float FACING_TURN_SPEED = 8.0f;
@@ -55,6 +61,8 @@ constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
 constexpr float PUSHBACK_DURATION = 0.2f;
 constexpr float PLAYER_KNOCKBACK_IMMUNITY_SECONDS = 2.0f;
 constexpr float RESURRECT_RANGE = 28.0f;
+constexpr int SHOP_SELL_DIVISOR = 2;
+constexpr float SHOP_NOTICE_DURATION = 1.6f;
 
 namespace {
 std::optional<Coordinate> firstWalkableInRegion(const Map& map, const Region& region) {
@@ -82,6 +90,18 @@ std::string regionName(RegionType type) {
   return "Region";
 }
 
+std::optional<Position> regionCenterByName(const Map& map, const std::string& name) {
+  const std::vector<Region>& regions = map.getRegions();
+  for (const Region& region : regions) {
+    if (regionName(region.type) == name) {
+      const float centerX = (region.x + (region.width / 2.0f)) * TILE_SIZE;
+      const float centerY = (region.y + (region.height / 2.0f)) * TILE_SIZE;
+      return Position(centerX, centerY);
+    }
+  }
+  return std::nullopt;
+}
+
 const char* mobTypeName(MobType type) {
   switch (type) {
   case MobType::Goblin:
@@ -92,6 +112,22 @@ const char* mobTypeName(MobType type) {
     return "Goblin Brute";
   }
   return "Mob";
+}
+
+const char* className(CharacterClass characterClass) {
+  switch (characterClass) {
+  case CharacterClass::Warrior:
+    return "Warrior";
+  case CharacterClass::Mage:
+    return "Mage";
+  case CharacterClass::Archer:
+    return "Archer";
+  case CharacterClass::Rogue:
+    return "Rogue";
+  case CharacterClass::Any:
+    break;
+  }
+  return "Adventurer";
 }
 
 float shortestAngleDiff(float from, float to) {
@@ -122,6 +158,10 @@ SDL_Color lootColorForItem(const ItemDef* def) {
     return SDL_Color{120, 220, 140, 255};
   }
   return SDL_Color{200, 200, 200, 255};
+}
+
+int itemPrice(const ItemDef* def) {
+  return def ? def->price : 0;
 }
 
 int regionIndexAt(const Map& map, int tileX, int tileY) {
@@ -188,6 +228,137 @@ void drawFacingArc(SDL_Renderer* renderer, const Position& center, float radius,
                  center.y + radius * std::sin(centerAngle + halfAngle) - cameraPosition.y);
 }
 
+std::vector<std::string> wrapText(TTF_Font* font, const std::string& text, int maxWidth) {
+  std::vector<std::string> lines;
+  std::string current;
+  std::string word;
+  auto flushWord = [&]() {
+    if (word.empty()) {
+      return;
+    }
+    std::string candidate = current.empty() ? word : current + " " + word;
+    int width = 0;
+    int height = 0;
+    TTF_GetStringSize(font, candidate.c_str(), candidate.size(), &width, &height);
+    if (width <= maxWidth) {
+      current = std::move(candidate);
+      word.clear();
+      return;
+    }
+    if (!current.empty()) {
+      lines.push_back(current);
+      current.clear();
+    }
+    TTF_GetStringSize(font, word.c_str(), word.size(), &width, &height);
+    if (width <= maxWidth) {
+      current = word;
+      word.clear();
+      return;
+    }
+    std::string chunk;
+    for (char ch : word) {
+      std::string next = chunk + ch;
+      TTF_GetStringSize(font, next.c_str(), next.size(), &width, &height);
+      if (width > maxWidth && !chunk.empty()) {
+        lines.push_back(chunk);
+        chunk.clear();
+      }
+      chunk += ch;
+    }
+    if (!chunk.empty()) {
+      current = chunk;
+    }
+    word.clear();
+  };
+
+  for (char ch : text) {
+    if (ch == '\n') {
+      flushWord();
+      if (!current.empty()) {
+        lines.push_back(current);
+        current.clear();
+      } else {
+        lines.push_back("");
+      }
+      continue;
+    }
+    if (ch == ' ') {
+      flushWord();
+    } else {
+      word += ch;
+    }
+  }
+  flushWord();
+  if (!current.empty()) {
+    lines.push_back(current);
+  }
+  if (lines.empty()) {
+    lines.push_back("");
+  }
+  return lines;
+}
+
+struct ShopLayout {
+  SDL_FRect panel;
+  SDL_FRect shopRect;
+  SDL_FRect inventoryRect;
+  float rowHeight = 16.0f;
+  float columnGap = 12.0f;
+};
+
+enum class QuestEntryType { Available = 0, TurnIn };
+
+struct QuestEntry {
+  QuestEntryType type = QuestEntryType::Available;
+  const QuestDef* def = nullptr;
+};
+
+ShopLayout shopLayout(int windowWidth, int windowHeight) {
+  constexpr float panelWidth = 520.0f;
+  constexpr float panelHeight = 200.0f;
+  const float x = (windowWidth - panelWidth) / 2.0f;
+  const float y = windowHeight - panelHeight - 120.0f;
+  ShopLayout layout;
+  layout.panel = SDL_FRect{x, y, panelWidth, panelHeight};
+  const float listWidth = (panelWidth - (layout.columnGap * 3.0f)) / 2.0f;
+  layout.shopRect = SDL_FRect{x + layout.columnGap, y + 36.0f, listWidth,
+                              panelHeight - 48.0f};
+  layout.inventoryRect = SDL_FRect{x + (layout.columnGap * 2.0f) + listWidth, y + 36.0f,
+                                   listWidth, panelHeight - 48.0f};
+  return layout;
+}
+
+bool isShopNpc(int npcId, const std::vector<int>& shopNpcIds) {
+  return std::find(shopNpcIds.begin(), shopNpcIds.end(), npcId) != shopNpcIds.end();
+}
+
+bool pointInRect(float x, float y, const SDL_FRect& rect) {
+  return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+}
+
+std::vector<QuestEntry> buildNpcQuestEntries(const std::string& npcName,
+                                             const QuestSystem& questSystem,
+                                             const QuestDatabase& questDatabase,
+                                             const QuestLogComponent& questLog,
+                                             const LevelComponent& level) {
+  std::vector<QuestEntry> entries;
+  const std::vector<const QuestDef*> available =
+      questSystem.availableQuests(npcName, level, questLog);
+  for (const QuestDef* def : available) {
+    entries.push_back(QuestEntry{QuestEntryType::Available, def});
+  }
+  for (const QuestProgress& progress : questLog.activeQuests) {
+    const QuestDef* def = questDatabase.getQuest(progress.questId);
+    if (!def || def->turnInNpcName != npcName) {
+      continue;
+    }
+    if (progress.completed && !progress.rewardsClaimed) {
+      entries.push_back(QuestEntry{QuestEntryType::TurnIn, def});
+    }
+  }
+  return entries;
+}
+
 } // namespace
 
 int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& equipment,
@@ -236,7 +407,21 @@ struct AttackProfile {
   bool isRanged = false;
   float projectileSpeed = 0.0f;
   float projectileRadius = 0.0f;
+  float projectileTrailLength = 0.0f;
   SDL_Color projectileColor = {255, 255, 255, 255};
+};
+
+struct ClassDefaults {
+  int baseAttackPower = 1;
+  int baseArmor = 0;
+  int strength = 5;
+  int dexterity = 5;
+  int intellect = 5;
+  int luck = 5;
+  int health = 100;
+  int mana = 50;
+  int weaponId = 1;
+  int offhandId = 0;
 };
 
 void applyOrRefreshBuff(BuffComponent& buffs, int buffId, const std::string& name, float duration) {
@@ -299,6 +484,7 @@ AttackProfile attackProfileForWeapon(const EquipmentComponent& equipment,
     profile.isRanged = true;
     profile.projectileSpeed = 220.0f;
     profile.projectileRadius = 9.0f;
+    profile.projectileTrailLength = 22.0f;
     profile.projectileColor = SDL_Color{255, 220, 120, 255};
     break;
   case WeaponType::Wand:
@@ -308,7 +494,13 @@ AttackProfile attackProfileForWeapon(const EquipmentComponent& equipment,
     profile.isRanged = true;
     profile.projectileSpeed = 200.0f;
     profile.projectileRadius = 10.0f;
+    profile.projectileTrailLength = 26.0f;
     profile.projectileColor = SDL_Color{140, 200, 255, 255};
+    break;
+  case WeaponType::Dagger:
+    profile.halfAngle = 0.85f;
+    profile.range = ATTACK_RANGE * 0.85f;
+    profile.cooldown = 0.35f;
     break;
   case WeaponType::None:
     profile.halfAngle = 0.65f;
@@ -316,7 +508,32 @@ AttackProfile attackProfileForWeapon(const EquipmentComponent& equipment,
     profile.cooldown = ATTACK_COOLDOWN_SECONDS;
     break;
   }
+  if (def->projectile.speed > 0.0f) {
+    profile.projectileSpeed = def->projectile.speed;
+  }
+  if (def->projectile.radius > 0.0f) {
+    profile.projectileRadius = def->projectile.radius;
+  }
+  if (def->projectile.trailLength > 0.0f) {
+    profile.projectileTrailLength = def->projectile.trailLength;
+  }
   return profile;
+}
+
+ClassDefaults classDefaultsFor(CharacterClass characterClass) {
+  switch (characterClass) {
+  case CharacterClass::Warrior:
+    return ClassDefaults{2, 1, 8, 4, 2, 3, 130, 30, 1, 2};
+  case CharacterClass::Mage:
+    return ClassDefaults{1, 0, 2, 4, 9, 4, 80, 90, 7, 0};
+  case CharacterClass::Archer:
+    return ClassDefaults{1, 0, 4, 9, 3, 4, 95, 50, 6, 0};
+  case CharacterClass::Rogue:
+    return ClassDefaults{1, 0, 5, 8, 2, 7, 90, 40, 8, 0};
+  case CharacterClass::Any:
+    return ClassDefaults{1, 0, 5, 5, 5, 5, 100, 50, 1, 2};
+  }
+  return ClassDefaults{};
 }
 
 void applyLevelUps(LevelComponent& level, StatsComponent& stats, SkillTreeComponent& skillTree) {
@@ -398,15 +615,43 @@ bool createLootEntity(Registry& registry, const ItemDatabase& database, const Po
   return true;
 }
 
+int createNpcEntity(Registry& registry, const Position& position, std::string name,
+                    std::string dialogLine, std::vector<int>& npcEntityIds) {
+  int entityId = registry.createEntity();
+  registry.registerComponentForEntity<TransformComponent>(
+      std::make_unique<TransformComponent>(position), entityId);
+  registry.registerComponentForEntity<GraphicComponent>(
+      std::make_unique<GraphicComponent>(position, SDL_Color({220, 200, 120, 255})), entityId);
+  registry.registerComponentForEntity<CollisionComponent>(
+      std::make_unique<CollisionComponent>(32.0f, 32.0f, false), entityId);
+  registry.registerComponentForEntity<NpcComponent>(
+      std::make_unique<NpcComponent>(std::move(name), std::move(dialogLine)), entityId);
+  npcEntityIds.push_back(entityId);
+  return entityId;
+}
+
+int createShopNpcEntity(Registry& registry, const Position& position, std::string name,
+                        std::string dialogLine, std::vector<int> stock,
+                        std::vector<int>& npcEntityIds, std::vector<int>& shopNpcIds) {
+  int entityId = createNpcEntity(registry, position, std::move(name), std::move(dialogLine),
+                                 npcEntityIds);
+  registry.registerComponentForEntity<ShopComponent>(
+      std::make_unique<ShopComponent>(std::move(stock)), entityId);
+  shopNpcIds.push_back(entityId);
+  return entityId;
+}
+
 int createProjectileEntity(Registry& registry, const Position& position, float velocityX,
                            float velocityY, float range, int sourceEntityId, int targetEntityId,
-                           int damage, bool isCrit, float radius, SDL_Color color,
+                           int damage, bool isCrit, float radius, float trailLength,
+                           SDL_Color color,
                            std::vector<int>& projectileEntityIds) {
   int entityId = registry.createEntity();
   registry.registerComponentForEntity<TransformComponent>(
       std::make_unique<TransformComponent>(position), entityId);
   auto projectile = std::make_unique<ProjectileComponent>(
-      sourceEntityId, targetEntityId, velocityX, velocityY, range, damage, isCrit, radius, color);
+      sourceEntityId, targetEntityId, velocityX, velocityY, range, damage, isCrit, radius,
+      trailLength, color);
   projectile->lastX = position.x;
   projectile->lastY = position.y;
   registry.registerComponentForEntity<ProjectileComponent>(std::move(projectile), entityId);
@@ -478,6 +723,8 @@ Game::Game() {
   this->itemDatabase = std::make_unique<ItemDatabase>();
   this->skillDatabase = std::make_unique<SkillDatabase>();
   this->skillTreeDefinition = std::make_unique<SkillTreeDefinition>();
+  this->questDatabase = std::make_unique<QuestDatabase>();
+  this->questSystem = std::make_unique<QuestSystem>(*this->questDatabase);
   this->eventBus = std::make_unique<EventBus>();
   this->floatingTextSystem = std::make_unique<FloatingTextSystem>(*this->eventBus);
   this->respawnSystem = std::make_unique<RespawnSystem>();
@@ -486,6 +733,7 @@ Game::Game() {
   this->skillBar = std::make_unique<SkillBar>();
   this->buffBar = std::make_unique<BuffBar>();
   this->skillTree = std::make_unique<SkillTree>();
+  this->questLogUi = std::make_unique<QuestLog>();
   if (!TTF_Init()) {
     logger->error("SDL TTF could not initialize! SDL_Error: {}", SDL_GetError());
     throw std::runtime_error("SDL TTF Initialization failed");
@@ -533,15 +781,44 @@ Game::Game() {
       std::make_unique<SkillTreeComponent>(), this->playerEntityId);
   this->registry->registerComponentForEntity<BuffComponent>(std::make_unique<BuffComponent>(),
                                                             this->playerEntityId);
+  this->registry->registerComponentForEntity<QuestLogComponent>(
+      std::make_unique<QuestLogComponent>(), this->playerEntityId);
+  constexpr CharacterClass kDefaultClass = CharacterClass::Any;
+  this->registry->registerComponentForEntity<ClassComponent>(
+      std::make_unique<ClassComponent>(kDefaultClass), this->playerEntityId);
 
   {
     InventoryComponent& inventory =
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    ItemInstance swordInstance{1};
-    if (inventory.addItem(swordInstance)) {
-      equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    HealthComponent& health = this->registry->getComponent<HealthComponent>(this->playerEntityId);
+    ManaComponent& mana = this->registry->getComponent<ManaComponent>(this->playerEntityId);
+    const ClassComponent& playerClass =
+        this->registry->getComponent<ClassComponent>(this->playerEntityId);
+    const ClassDefaults defaults = classDefaultsFor(playerClass.characterClass);
+    stats.baseAttackPower = defaults.baseAttackPower;
+    stats.baseArmor = defaults.baseArmor;
+    stats.strength = defaults.strength;
+    stats.dexterity = defaults.dexterity;
+    stats.intellect = defaults.intellect;
+    stats.luck = defaults.luck;
+    health.max = defaults.health;
+    health.current = defaults.health;
+    mana.max = defaults.mana;
+    mana.current = defaults.mana;
+    if (defaults.weaponId > 0) {
+      ItemInstance weaponInstance{defaults.weaponId};
+      if (inventory.addItem(weaponInstance)) {
+        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+      }
+    }
+    if (defaults.offhandId > 0) {
+      ItemInstance offhandInstance{defaults.offhandId};
+      if (inventory.addItem(offhandInstance)) {
+        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+      }
     }
   }
 
@@ -551,6 +828,49 @@ Game::Game() {
     skills.slots[0].skillId = 1;
     skills.slots[1].skillId = 2;
     skills.slots[2].skillId = 3;
+  }
+
+  {
+    QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    const LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    this->questSystem->addQuest(questLog, level, 1);
+  }
+
+  {
+    int npcTileX = start.x + 1;
+    int npcTileY = start.y;
+    if (!this->map->isWalkable(npcTileX, npcTileY)) {
+      npcTileX = start.x;
+      npcTileY = start.y + 1;
+    }
+    if (!this->map->isWalkable(npcTileX, npcTileY)) {
+      npcTileX = start.x;
+      npcTileY = start.y;
+    }
+    Position npcPosition(npcTileX * TILE_SIZE, npcTileY * TILE_SIZE);
+    createNpcEntity(*this->registry, npcPosition, "Town Guide",
+                    "Welcome! Explore the world and grow strong.", this->npcEntityIds);
+  }
+
+  {
+    int npcTileX = start.x + 2;
+    int npcTileY = start.y;
+    if (!this->map->isWalkable(npcTileX, npcTileY)) {
+      npcTileX = start.x + 1;
+      npcTileY = start.y + 1;
+    }
+    if (!this->map->isWalkable(npcTileX, npcTileY)) {
+      npcTileX = start.x;
+      npcTileY = start.y + 2;
+    }
+    if (this->map->isWalkable(npcTileX, npcTileY)) {
+      Position npcPosition(npcTileX * TILE_SIZE, npcTileY * TILE_SIZE);
+      createShopNpcEntity(*this->registry, npcPosition, "Shopkeeper",
+                          "Need supplies? Take a look.", {1, 5, 6, 7, 8, 2, 3, 4},
+                          this->npcEntityIds, this->shopNpcIds);
+    }
   }
 
   { // Unlock the starter skill
@@ -605,6 +925,9 @@ bool Game::isRunning() {
     if (event.type == SDL_EVENT_QUIT) {
       running = false;
     }
+    if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+      this->mouseWheelDelta += event.wheel.y;
+    }
   }
   return running;
 }
@@ -619,6 +942,7 @@ void Game::update(float dt) {
         std::max(0.0f, this->playerKnockbackImmunityRemaining - dt);
   }
   this->floatingTextSystem->update(dt);
+  this->shopNoticeTimer = std::max(0.0f, this->shopNoticeTimer - dt);
   this->playerHitFlashTimer = std::max(0.0f, this->playerHitFlashTimer - dt);
   this->respawnSystem->update(dt, *this->map, *this->registry, this->mobEntityIds);
 
@@ -640,8 +964,14 @@ void Game::update(float dt) {
   auto result = std::make_pair(x, y);
 
   const bool pickupPressed = keyboardState[SDL_SCANCODE_F];
+  const bool interactPressed = keyboardState[SDL_SCANCODE_T];
   const bool debugPressed = keyboardState[SDL_SCANCODE_D];
   const bool resurrectPressed = keyboardState[SDL_SCANCODE_R];
+  const bool questLogPressed = keyboardState[SDL_SCANCODE_Q];
+  const bool acceptQuestPressed = keyboardState[SDL_SCANCODE_A];
+  const bool turnInQuestPressed = keyboardState[SDL_SCANCODE_C];
+  const bool questPrevPressed = keyboardState[SDL_SCANCODE_PAGEUP];
+  const bool questNextPressed = keyboardState[SDL_SCANCODE_PAGEDOWN];
   const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3,
                                                  SDL_SCANCODE_4, SDL_SCANCODE_5};
   float mouseX = 0.0f;
@@ -668,14 +998,6 @@ void Game::update(float dt) {
     this->skillTree->handleInput(keyboardState, static_cast<int>(mouseX),
                                  static_cast<int>(mouseY), mousePressed, skillTree,
                                  *this->skillTreeDefinition, WINDOW_WIDTH);
-  }
-
-  {
-    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
-    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    SkillTreeComponent& skillTree =
-        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
-    applyLevelUps(level, stats, skillTree);
   }
 
   {
@@ -749,6 +1071,7 @@ void Game::update(float dt) {
       if (inventory.addItem(item)) {
         const ItemDef* def = this->itemDatabase->getItem(item.itemId);
         std::string name = def ? def->name : "Item";
+        this->eventBus->emitItemPickupEvent(ItemPickupEvent{item.itemId, 1});
         this->eventBus->emitFloatingTextEvent(
             FloatingTextEvent{"Picked up " + name, playerCenter, FloatingTextKind::Info});
         GraphicComponent& graphic = this->registry->getComponent<GraphicComponent>(closestLootId);
@@ -763,10 +1086,273 @@ void Game::update(float dt) {
     }
   }
   this->wasPickupPressed = pickupPressed;
+  if (questLogPressed && !this->wasQuestLogPressed) {
+    this->questLogVisible = !this->questLogVisible;
+  }
+  this->wasQuestLogPressed = questLogPressed;
+  const bool acceptQuestJustPressed = acceptQuestPressed && !this->wasAcceptQuestPressed;
+  const bool turnInQuestJustPressed = turnInQuestPressed && !this->wasTurnInQuestPressed;
+  const bool questPrevJustPressed = questPrevPressed && !this->wasQuestPrevPressed;
+  const bool questNextJustPressed = questNextPressed && !this->wasQuestNextPressed;
+  this->wasAcceptQuestPressed = acceptQuestPressed;
+  this->wasTurnInQuestPressed = turnInQuestPressed;
+  this->wasQuestPrevPressed = questPrevPressed;
+  this->wasQuestNextPressed = questNextPressed;
+  const bool interactJustPressed = interactPressed && !this->wasInteractPressed;
+  this->wasInteractPressed = interactPressed;
   if (debugPressed && !this->wasDebugPressed) {
     this->showDebugMobRanges = !this->showDebugMobRanges;
   }
   this->wasDebugPressed = debugPressed;
+
+  {
+    const TransformComponent& playerTransform =
+        this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const CollisionComponent& playerCollision =
+        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    const float rangeSquared = NPC_INTERACT_RANGE * NPC_INTERACT_RANGE;
+    int closestNpcId = -1;
+    float closestDist = rangeSquared;
+    for (int npcEntityId : this->npcEntityIds) {
+      const TransformComponent& npcTransform =
+          this->registry->getComponent<TransformComponent>(npcEntityId);
+      const CollisionComponent& npcCollision =
+          this->registry->getComponent<CollisionComponent>(npcEntityId);
+      const Position npcCenter = centerForEntity(npcTransform, npcCollision);
+      const float dist = squaredDistance(playerCenter, npcCenter);
+      if (dist <= closestDist) {
+        closestDist = dist;
+        closestNpcId = npcEntityId;
+      }
+    }
+    this->currentNpcId = closestNpcId;
+    if (this->activeNpcId != -1) {
+      const TransformComponent& activeTransform =
+          this->registry->getComponent<TransformComponent>(this->activeNpcId);
+      const CollisionComponent& activeCollision =
+          this->registry->getComponent<CollisionComponent>(this->activeNpcId);
+      const Position activeCenter = centerForEntity(activeTransform, activeCollision);
+      if (squaredDistance(playerCenter, activeCenter) > rangeSquared) {
+        this->activeNpcId = -1;
+        this->shopOpen = false;
+      }
+    }
+    if (interactJustPressed) {
+      if (this->activeNpcId != -1) {
+        this->activeNpcId = -1;
+        this->shopOpen = false;
+      } else if (this->currentNpcId != -1) {
+        this->activeNpcId = this->currentNpcId;
+        this->npcDialogScroll = 0.0f;
+        this->shopOpen = isShopNpc(this->activeNpcId, this->shopNpcIds);
+        this->activeNpcQuestSelection = 0;
+        QuestLogComponent& questLog =
+            this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+        StatsComponent& stats =
+            this->registry->getComponent<StatsComponent>(this->playerEntityId);
+        LevelComponent& level =
+            this->registry->getComponent<LevelComponent>(this->playerEntityId);
+        InventoryComponent& inventory =
+            this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+        const NpcComponent& npc =
+            this->registry->getComponent<NpcComponent>(this->activeNpcId);
+        const std::vector<std::string> turnedIn =
+            this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
+        if (!turnedIn.empty()) {
+          const TransformComponent& playerTransform =
+              this->registry->getComponent<TransformComponent>(this->playerEntityId);
+          const CollisionComponent& playerCollision =
+              this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+          const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+          for (const std::string& questName : turnedIn) {
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{"Completed: " + questName, playerCenter,
+                                  FloatingTextKind::Info});
+          }
+        }
+      }
+    }
+    if (this->activeNpcId != -1 && !this->shopOpen && acceptQuestJustPressed) {
+      QuestLogComponent& questLog =
+          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+      LevelComponent& level =
+          this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      const NpcComponent& npc =
+          this->registry->getComponent<NpcComponent>(this->activeNpcId);
+      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
+          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+      if (!entries.empty() &&
+          this->activeNpcQuestSelection >= 0 &&
+          this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
+          entries[this->activeNpcQuestSelection].type == QuestEntryType::Available) {
+        const QuestDef* def = entries[this->activeNpcQuestSelection].def;
+        if (def) {
+          this->questSystem->addQuest(questLog, level, def->id);
+          const TransformComponent& playerTransform =
+              this->registry->getComponent<TransformComponent>(this->playerEntityId);
+          const CollisionComponent& playerCollision =
+              this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+          const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+          this->eventBus->emitFloatingTextEvent(
+            FloatingTextEvent{"Accepted: " + def->name, playerCenter,
+                              FloatingTextKind::Info});
+        }
+      }
+    }
+    if (this->activeNpcId != -1 && !this->shopOpen && turnInQuestJustPressed) {
+      QuestLogComponent& questLog =
+          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+      StatsComponent& stats =
+          this->registry->getComponent<StatsComponent>(this->playerEntityId);
+      LevelComponent& level =
+          this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      InventoryComponent& inventory =
+          this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+      const NpcComponent& npc =
+          this->registry->getComponent<NpcComponent>(this->activeNpcId);
+      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
+          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+      if (!entries.empty() &&
+          this->activeNpcQuestSelection >= 0 &&
+          this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
+          entries[this->activeNpcQuestSelection].type == QuestEntryType::TurnIn) {
+        const QuestDef* def = entries[this->activeNpcQuestSelection].def;
+        if (def) {
+          const std::vector<std::string> turnedIn =
+              this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
+      if (!turnedIn.empty()) {
+        const TransformComponent& playerTransform =
+            this->registry->getComponent<TransformComponent>(this->playerEntityId);
+        const CollisionComponent& playerCollision =
+            this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+        const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+        for (const std::string& questName : turnedIn) {
+          this->eventBus->emitFloatingTextEvent(
+              FloatingTextEvent{"Completed: " + questName, playerCenter,
+                                FloatingTextKind::Info});
+        }
+      }
+        }
+      }
+    }
+    if (this->activeNpcId != -1 && !this->shopOpen &&
+        (questPrevJustPressed || questNextJustPressed)) {
+      QuestLogComponent& questLog =
+          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+      LevelComponent& level =
+          this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      const NpcComponent& npc =
+          this->registry->getComponent<NpcComponent>(this->activeNpcId);
+      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
+          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+      if (!entries.empty()) {
+        const int count = static_cast<int>(entries.size());
+        if (questNextJustPressed) {
+          this->activeNpcQuestSelection = (this->activeNpcQuestSelection + 1) % count;
+        } else if (questPrevJustPressed) {
+          this->activeNpcQuestSelection =
+              (this->activeNpcQuestSelection - 1 + count) % count;
+        }
+      } else {
+        this->activeNpcQuestSelection = 0;
+      }
+    }
+    if (this->activeNpcId != -1 && !this->shopOpen && this->mouseWheelDelta != 0.0f) {
+      this->npcDialogScroll -= this->mouseWheelDelta * 18.0f;
+    }
+  }
+  const bool click = mousePressed && !this->wasMousePressed;
+  this->wasMousePressed = mousePressed;
+  if (this->shopOpen && this->activeNpcId != -1) {
+    ShopComponent& shop = this->registry->getComponent<ShopComponent>(this->activeNpcId);
+    InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    const ShopLayout layout = shopLayout(WINDOW_WIDTH, WINDOW_HEIGHT);
+    const int shopVisibleRows =
+        std::max(1, static_cast<int>(std::floor(layout.shopRect.h / layout.rowHeight)));
+    const int invVisibleRows =
+        std::max(1, static_cast<int>(std::floor(layout.inventoryRect.h / layout.rowHeight)));
+    const int shopMaxScrollRows =
+        std::max(0, static_cast<int>(shop.stock.size()) - shopVisibleRows);
+    const int invMaxScrollRows =
+        std::max(0, static_cast<int>(inventory.items.size()) - invVisibleRows);
+
+    if (this->mouseWheelDelta != 0.0f) {
+      if (pointInRect(mouseX, mouseY, layout.shopRect)) {
+        this->shopScroll -= this->mouseWheelDelta * layout.rowHeight;
+      } else if (pointInRect(mouseX, mouseY, layout.inventoryRect)) {
+        this->inventoryScroll -= this->mouseWheelDelta * layout.rowHeight;
+      } else {
+        this->shopScroll -= this->mouseWheelDelta * layout.rowHeight;
+        this->inventoryScroll -= this->mouseWheelDelta * layout.rowHeight;
+      }
+    }
+    this->shopScroll = std::clamp(this->shopScroll, 0.0f,
+                                  static_cast<float>(shopMaxScrollRows) * layout.rowHeight);
+    this->inventoryScroll = std::clamp(
+        this->inventoryScroll, 0.0f,
+        static_cast<float>(invMaxScrollRows) * layout.rowHeight);
+    const int shopStartIndex = static_cast<int>(std::floor(this->shopScroll / layout.rowHeight));
+    const int invStartIndex =
+        static_cast<int>(std::floor(this->inventoryScroll / layout.rowHeight));
+
+    if (click && pointInRect(mouseX, mouseY, layout.shopRect)) {
+      const int row =
+          static_cast<int>(std::floor((mouseY - layout.shopRect.y) / layout.rowHeight));
+      const int index = shopStartIndex + row;
+      if (row >= 0 && row < shopVisibleRows && index >= 0 &&
+          index < static_cast<int>(shop.stock.size())) {
+        const int itemId = shop.stock[index];
+        const ItemDef* def = this->itemDatabase->getItem(itemId);
+        const int price = itemPrice(def);
+        if (def && price > 0) {
+          if (stats.gold < price) {
+            this->shopNotice = "Not enough gold.";
+            this->shopNoticeTimer = SHOP_NOTICE_DURATION;
+          } else if (!inventory.addItem(ItemInstance{itemId})) {
+            this->shopNotice = "Inventory full.";
+            this->shopNoticeTimer = SHOP_NOTICE_DURATION;
+          } else {
+            stats.gold -= price;
+            this->shopNotice = "Purchased " + def->name + ".";
+            this->shopNoticeTimer = SHOP_NOTICE_DURATION;
+          }
+        }
+      }
+    }
+
+    if (click && pointInRect(mouseX, mouseY, layout.inventoryRect)) {
+      const int row =
+          static_cast<int>(std::floor((mouseY - layout.inventoryRect.y) / layout.rowHeight));
+      const int index = invStartIndex + row;
+      if (row >= 0 && row < invVisibleRows && index >= 0 &&
+          index < static_cast<int>(inventory.items.size())) {
+        ItemInstance item = inventory.items[index];
+        const ItemDef* def = this->itemDatabase->getItem(item.itemId);
+        const int basePrice = itemPrice(def);
+        const int sellPrice =
+            basePrice > 0 ? std::max(1, basePrice / SHOP_SELL_DIVISOR) : 0;
+        if (inventory.removeItemAt(static_cast<std::size_t>(index))) {
+          stats.gold += sellPrice;
+          if (def) {
+            this->shopNotice = "Sold " + def->name + ".";
+          } else {
+            this->shopNotice = "Sold item.";
+          }
+          this->shopNoticeTimer = SHOP_NOTICE_DURATION;
+        }
+      }
+    }
+  }
+  if (this->questLogVisible && !this->shopOpen && this->mouseWheelDelta != 0.0f) {
+    const SDL_FRect panel = this->questLogUi->panelRect(WINDOW_WIDTH, WINDOW_HEIGHT);
+    if (pointInRect(mouseX, mouseY, panel)) {
+      this->questLogScroll -= this->mouseWheelDelta * 18.0f;
+    }
+  }
+  this->mouseWheelDelta = 0.0f;
 
   {
     if (this->isPlayerGhost) {
@@ -850,6 +1436,7 @@ void Game::update(float dt) {
     if (mobHealth.current == 0) {
       LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
       const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+      this->eventBus->emitMobKilledEvent(MobKilledEvent{mob.type, mobEntityId});
       level.experience += mob.experience;
       this->eventBus->emitFloatingTextEvent(
           FloatingTextEvent{"XP +" + std::to_string(mob.experience), hitPosition,
@@ -958,6 +1545,7 @@ void Game::update(float dt) {
                                    dy * attackProfile.projectileSpeed, attackProfile.range,
                                    this->playerEntityId, this->currentAutoTargetId, attackDamage,
                                    isCrit, attackProfile.projectileRadius,
+                                   attackProfile.projectileTrailLength,
                                    attackProfile.projectileColor, this->projectileEntityIds);
             this->attackCooldownRemaining = attackProfile.cooldown;
           }
@@ -1118,6 +1706,18 @@ void Game::update(float dt) {
     }
     this->lastRegionIndex = currentRegionIndex;
   }
+  {
+    QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    this->questSystem->update(*this->eventBus, questLog, stats, level, inventory);
+    SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    applyLevelUps(level, stats, skillTree);
+  }
   this->camera->update(playerCenter);
 }
 
@@ -1189,15 +1789,49 @@ void Game::render() {
       SDL_SetRenderDrawColor(this->renderer, projectile.color.r, projectile.color.g,
                              projectile.color.b, projectile.color.a);
       SDL_RenderFillRect(this->renderer, &projectileRect);
-      SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 200);
-      SDL_RenderLine(this->renderer, projectile.lastX - cameraPosition.x,
-                     projectile.lastY - cameraPosition.y,
-                     projectileTransform.position.x - cameraPosition.x,
-                     projectileTransform.position.y - cameraPosition.y);
+      if (projectile.trailLength > 0.0f) {
+        const float speed = std::sqrt((projectile.velocityX * projectile.velocityX) +
+                                      (projectile.velocityY * projectile.velocityY));
+        if (speed > 0.001f) {
+          const float nx = projectile.velocityX / speed;
+          const float ny = projectile.velocityY / speed;
+          const float tailX = projectileTransform.position.x - (nx * projectile.trailLength);
+          const float tailY = projectileTransform.position.y - (ny * projectile.trailLength);
+          SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 200);
+          SDL_RenderLine(this->renderer, tailX - cameraPosition.x, tailY - cameraPosition.y,
+                         projectileTransform.position.x - cameraPosition.x,
+                         projectileTransform.position.y - cameraPosition.y);
+        }
+      }
       drawCircle(this->renderer, projectileTransform.position, projectile.radius + 2.0f,
                  cameraPosition, SDL_Color{255, 255, 255, 200});
       SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 200);
       SDL_RenderRect(this->renderer, &projectileRect);
+    }
+  }
+
+  { // Quest turn-in markers above NPCs
+    const QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    for (const QuestProgress& progress : questLog.activeQuests) {
+      const QuestDef* def = this->questDatabase->getQuest(progress.questId);
+      if (!def || def->turnInNpcName.empty() || !progress.completed || progress.rewardsClaimed) {
+        continue;
+      }
+      for (int npcId : this->npcEntityIds) {
+        const NpcComponent& npc = this->registry->getComponent<NpcComponent>(npcId);
+        if (npc.name != def->turnInNpcName) {
+          continue;
+        }
+        const TransformComponent& npcTransform =
+            this->registry->getComponent<TransformComponent>(npcId);
+        const CollisionComponent& npcCollision =
+            this->registry->getComponent<CollisionComponent>(npcId);
+        const Position npcCenter = centerForEntity(npcTransform, npcCollision);
+        SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+        drawCircle(this->renderer, Position(npcCenter.x, npcCenter.y - 18.0f), 6.0f,
+                   cameraPosition, SDL_Color{255, 220, 80, 200});
+      }
     }
   }
 
@@ -1332,6 +1966,408 @@ void Game::render() {
           SDL_DestroyTexture(promptTexture);
         }
       }
+    }
+  }
+
+  { // NPC prompt
+    if (this->currentNpcId != -1 && this->activeNpcId == -1) {
+      const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->currentNpcId);
+      const std::string prompt = "Press T to talk to " + npc.name;
+      SDL_Color promptColor = {240, 230, 200, 255};
+      SDL_Surface* promptSurface =
+          TTF_RenderText_Solid(this->font, prompt.c_str(), prompt.length(), promptColor);
+      SDL_Texture* promptTexture = SDL_CreateTextureFromSurface(this->renderer, promptSurface);
+      SDL_FRect promptRect = {12.0f, WINDOW_HEIGHT - 140.0f,
+                              static_cast<float>(promptSurface->w),
+                              static_cast<float>(promptSurface->h)};
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
+      SDL_FRect bgRect = {promptRect.x - 6.0f, promptRect.y - 4.0f, promptRect.w + 12.0f,
+                          promptRect.h + 8.0f};
+      SDL_RenderFillRect(this->renderer, &bgRect);
+      SDL_RenderTexture(this->renderer, promptTexture, nullptr, &promptRect);
+      SDL_DestroySurface(promptSurface);
+      SDL_DestroyTexture(promptTexture);
+    }
+  }
+
+  { // Shop UI
+    if (this->shopOpen && this->activeNpcId != -1) {
+      const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->activeNpcId);
+      const ShopComponent& shop = this->registry->getComponent<ShopComponent>(this->activeNpcId);
+      const InventoryComponent& inventory =
+          this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+      const StatsComponent& stats =
+          this->registry->getComponent<StatsComponent>(this->playerEntityId);
+      const ShopLayout layout = shopLayout(WINDOW_WIDTH, WINDOW_HEIGHT);
+      const int shopHoveredRow = pointInRect(mouseX, mouseY, layout.shopRect)
+                                     ? static_cast<int>(std::floor((mouseY - layout.shopRect.y) /
+                                                                   layout.rowHeight))
+                                     : -1;
+      const int invHoveredRow = pointInRect(mouseX, mouseY, layout.inventoryRect)
+                                    ? static_cast<int>(std::floor((mouseY - layout.inventoryRect.y) /
+                                                                  layout.rowHeight))
+                                    : -1;
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 12, 12, 12, 220);
+      SDL_RenderFillRect(this->renderer, &layout.panel);
+      SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 140);
+      SDL_RenderRect(this->renderer, &layout.panel);
+
+      SDL_Color titleColor = {255, 240, 210, 255};
+      SDL_Color headerColor = {220, 220, 220, 255};
+      SDL_Color textColor = {235, 235, 235, 255};
+      SDL_Color hintColor = {180, 180, 180, 255};
+
+      const std::string title = npc.name + " - Shop";
+      SDL_Surface* titleSurface =
+          TTF_RenderText_Solid(this->font, title.c_str(), title.length(), titleColor);
+      SDL_Texture* titleTexture = SDL_CreateTextureFromSurface(this->renderer, titleSurface);
+      SDL_FRect titleRect = {layout.panel.x + 12.0f, layout.panel.y + 8.0f,
+                             static_cast<float>(titleSurface->w),
+                             static_cast<float>(titleSurface->h)};
+      SDL_RenderTexture(this->renderer, titleTexture, nullptr, &titleRect);
+      SDL_DestroySurface(titleSurface);
+      SDL_DestroyTexture(titleTexture);
+
+      const std::string goldText = "Gold: " + std::to_string(stats.gold);
+      SDL_Surface* goldSurface =
+          TTF_RenderText_Solid(this->font, goldText.c_str(), goldText.length(), headerColor);
+      SDL_Texture* goldTexture = SDL_CreateTextureFromSurface(this->renderer, goldSurface);
+      SDL_FRect goldRect = {layout.panel.x + layout.panel.w - goldSurface->w - 12.0f,
+                            layout.panel.y + 8.0f, static_cast<float>(goldSurface->w),
+                            static_cast<float>(goldSurface->h)};
+      SDL_RenderTexture(this->renderer, goldTexture, nullptr, &goldRect);
+      SDL_DestroySurface(goldSurface);
+      SDL_DestroyTexture(goldTexture);
+
+      const std::string shopHeader = "Shop";
+      SDL_Surface* shopSurface =
+          TTF_RenderText_Solid(this->font, shopHeader.c_str(), shopHeader.length(), headerColor);
+      SDL_Texture* shopTexture = SDL_CreateTextureFromSurface(this->renderer, shopSurface);
+      SDL_FRect shopHeaderRect = {layout.shopRect.x, layout.shopRect.y - 18.0f,
+                                  static_cast<float>(shopSurface->w),
+                                  static_cast<float>(shopSurface->h)};
+      SDL_RenderTexture(this->renderer, shopTexture, nullptr, &shopHeaderRect);
+      SDL_DestroySurface(shopSurface);
+      SDL_DestroyTexture(shopTexture);
+
+      const std::string invHeader = "Inventory";
+      SDL_Surface* invSurface =
+          TTF_RenderText_Solid(this->font, invHeader.c_str(), invHeader.length(), headerColor);
+      SDL_Texture* invTexture = SDL_CreateTextureFromSurface(this->renderer, invSurface);
+      SDL_FRect invHeaderRect = {layout.inventoryRect.x, layout.inventoryRect.y - 18.0f,
+                                 static_cast<float>(invSurface->w),
+                                 static_cast<float>(invSurface->h)};
+      SDL_RenderTexture(this->renderer, invTexture, nullptr, &invHeaderRect);
+      SDL_DestroySurface(invSurface);
+      SDL_DestroyTexture(invTexture);
+
+      const int shopVisibleRows =
+          std::max(1, static_cast<int>(std::floor(layout.shopRect.h / layout.rowHeight)));
+      const int invVisibleRows =
+          std::max(1, static_cast<int>(std::floor(layout.inventoryRect.h / layout.rowHeight)));
+      const int shopMaxScrollRows =
+          std::max(0, static_cast<int>(shop.stock.size()) - shopVisibleRows);
+      const int invMaxScrollRows =
+          std::max(0, static_cast<int>(inventory.items.size()) - invVisibleRows);
+      this->shopScroll = std::clamp(this->shopScroll, 0.0f,
+                                    static_cast<float>(shopMaxScrollRows) * layout.rowHeight);
+      this->inventoryScroll = std::clamp(
+          this->inventoryScroll, 0.0f,
+          static_cast<float>(invMaxScrollRows) * layout.rowHeight);
+      const int shopStartIndex = static_cast<int>(std::floor(this->shopScroll / layout.rowHeight));
+      const int invStartIndex =
+          static_cast<int>(std::floor(this->inventoryScroll / layout.rowHeight));
+
+      for (int i = 0; i < shopVisibleRows; ++i) {
+        const int index = shopStartIndex + i;
+        if (index < 0 || index >= static_cast<int>(shop.stock.size())) {
+          break;
+        }
+        const int itemId = shop.stock[index];
+        const ItemDef* def = this->itemDatabase->getItem(itemId);
+        if (!def) {
+          continue;
+        }
+        if (i == shopHoveredRow) {
+          SDL_SetRenderDrawColor(this->renderer, 60, 60, 90, 140);
+          SDL_FRect rowRect = {layout.shopRect.x, layout.shopRect.y + (i * layout.rowHeight),
+                               layout.shopRect.w, layout.rowHeight};
+          SDL_RenderFillRect(this->renderer, &rowRect);
+        }
+        const int price = itemPrice(def);
+        const std::string line = def->name + " - " + std::to_string(price);
+        SDL_Surface* lineSurface =
+            TTF_RenderText_Solid(this->font, line.c_str(), line.length(), textColor);
+        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
+        SDL_FRect lineRect = {layout.shopRect.x, layout.shopRect.y + (i * layout.rowHeight),
+                              static_cast<float>(lineSurface->w),
+                              static_cast<float>(lineSurface->h)};
+        SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
+        SDL_DestroySurface(lineSurface);
+        SDL_DestroyTexture(lineTexture);
+      }
+      if (shopMaxScrollRows > 0) {
+        const float trackX = layout.shopRect.x + layout.shopRect.w - 6.0f;
+        const float trackY = layout.shopRect.y;
+        const float trackH = layout.shopRect.h;
+        const float thumbH = std::max(18.0f,
+                                      (static_cast<float>(shopVisibleRows) /
+                                       static_cast<float>(shop.stock.size())) *
+                                          trackH);
+        const float scrollRatio =
+            (shopMaxScrollRows > 0)
+                ? (this->shopScroll /
+                   (static_cast<float>(shopMaxScrollRows) * layout.rowHeight))
+                : 0.0f;
+        const float thumbY = trackY + (trackH - thumbH) * scrollRatio;
+        SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 220);
+        SDL_FRect trackRect = {trackX, trackY, 4.0f, trackH};
+        SDL_RenderFillRect(this->renderer, &trackRect);
+        SDL_SetRenderDrawColor(this->renderer, 200, 200, 200, 220);
+        SDL_FRect thumbRect = {trackX, thumbY, 4.0f, thumbH};
+        SDL_RenderFillRect(this->renderer, &thumbRect);
+      }
+
+      for (int i = 0; i < invVisibleRows; ++i) {
+        const int index = invStartIndex + i;
+        if (index < 0 || index >= static_cast<int>(inventory.items.size())) {
+          break;
+        }
+        const ItemDef* def = this->itemDatabase->getItem(inventory.items[index].itemId);
+        if (!def) {
+          continue;
+        }
+        if (i == invHoveredRow) {
+          SDL_SetRenderDrawColor(this->renderer, 70, 60, 40, 140);
+          SDL_FRect rowRect = {layout.inventoryRect.x,
+                               layout.inventoryRect.y + (i * layout.rowHeight),
+                               layout.inventoryRect.w, layout.rowHeight};
+          SDL_RenderFillRect(this->renderer, &rowRect);
+        }
+        const int basePrice = itemPrice(def);
+        const int sellPrice =
+            basePrice > 0 ? std::max(1, basePrice / SHOP_SELL_DIVISOR) : 0;
+        const std::string line = def->name + " - " + std::to_string(sellPrice);
+        SDL_Surface* lineSurface =
+            TTF_RenderText_Solid(this->font, line.c_str(), line.length(), textColor);
+        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
+        SDL_FRect lineRect = {layout.inventoryRect.x,
+                              layout.inventoryRect.y + (i * layout.rowHeight),
+                              static_cast<float>(lineSurface->w),
+                              static_cast<float>(lineSurface->h)};
+        SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
+        SDL_DestroySurface(lineSurface);
+        SDL_DestroyTexture(lineTexture);
+      }
+      if (invMaxScrollRows > 0) {
+        const float trackX = layout.inventoryRect.x + layout.inventoryRect.w - 6.0f;
+        const float trackY = layout.inventoryRect.y;
+        const float trackH = layout.inventoryRect.h;
+        const float thumbH =
+            std::max(18.0f, (static_cast<float>(invVisibleRows) /
+                             static_cast<float>(inventory.items.size())) *
+                                trackH);
+        const float scrollRatio =
+            (invMaxScrollRows > 0)
+                ? (this->inventoryScroll /
+                   (static_cast<float>(invMaxScrollRows) * layout.rowHeight))
+                : 0.0f;
+        const float thumbY = trackY + (trackH - thumbH) * scrollRatio;
+        SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 220);
+        SDL_FRect trackRect = {trackX, trackY, 4.0f, trackH};
+        SDL_RenderFillRect(this->renderer, &trackRect);
+        SDL_SetRenderDrawColor(this->renderer, 200, 200, 200, 220);
+        SDL_FRect thumbRect = {trackX, thumbY, 4.0f, thumbH};
+        SDL_RenderFillRect(this->renderer, &thumbRect);
+      }
+
+      const std::string hint = "Click item to buy/sell";
+      SDL_Surface* hintSurface =
+          TTF_RenderText_Solid(this->font, hint.c_str(), hint.length(), hintColor);
+      SDL_Texture* hintTexture = SDL_CreateTextureFromSurface(this->renderer, hintSurface);
+      SDL_FRect hintRect = {layout.panel.x + 12.0f,
+                            layout.panel.y + layout.panel.h - 18.0f,
+                            static_cast<float>(hintSurface->w),
+                            static_cast<float>(hintSurface->h)};
+      SDL_RenderTexture(this->renderer, hintTexture, nullptr, &hintRect);
+      SDL_DestroySurface(hintSurface);
+      SDL_DestroyTexture(hintTexture);
+
+      if (shopHoveredRow >= 0) {
+        const int index = shopStartIndex + shopHoveredRow;
+        const ItemDef* def =
+            (index >= 0 && index < static_cast<int>(shop.stock.size()))
+                ? this->itemDatabase->getItem(shop.stock[index])
+                : nullptr;
+        if (def) {
+          const std::string tip = "Buy for " + std::to_string(itemPrice(def)) + " gold";
+          SDL_Surface* tipSurface =
+              TTF_RenderText_Solid(this->font, tip.c_str(), tip.length(), headerColor);
+          SDL_Texture* tipTexture = SDL_CreateTextureFromSurface(this->renderer, tipSurface);
+          SDL_FRect tipRect = {layout.shopRect.x,
+                               layout.shopRect.y + (shopHoveredRow * layout.rowHeight) - 18.0f,
+                               static_cast<float>(tipSurface->w),
+                               static_cast<float>(tipSurface->h)};
+          SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+          SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 180);
+          SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f,
+                             tipRect.h + 4.0f};
+          SDL_RenderFillRect(this->renderer, &tipBg);
+          SDL_RenderTexture(this->renderer, tipTexture, nullptr, &tipRect);
+          SDL_DestroySurface(tipSurface);
+          SDL_DestroyTexture(tipTexture);
+        }
+      }
+
+      if (invHoveredRow >= 0) {
+        const int index = invStartIndex + invHoveredRow;
+        const ItemDef* def = (index >= 0 && index < static_cast<int>(inventory.items.size()))
+                                 ? this->itemDatabase->getItem(inventory.items[index].itemId)
+                                 : nullptr;
+        if (def) {
+          const int basePrice = itemPrice(def);
+          const int sellPrice =
+              basePrice > 0 ? std::max(1, basePrice / SHOP_SELL_DIVISOR) : 0;
+          const std::string tip = "Sell for " + std::to_string(sellPrice) + " gold";
+          SDL_Surface* tipSurface =
+              TTF_RenderText_Solid(this->font, tip.c_str(), tip.length(), headerColor);
+          SDL_Texture* tipTexture = SDL_CreateTextureFromSurface(this->renderer, tipSurface);
+          SDL_FRect tipRect = {layout.inventoryRect.x,
+                               layout.inventoryRect.y + (invHoveredRow * layout.rowHeight) - 18.0f,
+                               static_cast<float>(tipSurface->w),
+                               static_cast<float>(tipSurface->h)};
+          SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+          SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 180);
+          SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f,
+                             tipRect.h + 4.0f};
+          SDL_RenderFillRect(this->renderer, &tipBg);
+          SDL_RenderTexture(this->renderer, tipTexture, nullptr, &tipRect);
+          SDL_DestroySurface(tipSurface);
+          SDL_DestroyTexture(tipTexture);
+        }
+      }
+
+      if (this->shopNoticeTimer > 0.0f && !this->shopNotice.empty()) {
+        SDL_Surface* noticeSurface =
+            TTF_RenderText_Solid(this->font, this->shopNotice.c_str(),
+                                 this->shopNotice.length(), headerColor);
+        SDL_Texture* noticeTexture = SDL_CreateTextureFromSurface(this->renderer, noticeSurface);
+        SDL_FRect noticeRect = {layout.panel.x + 12.0f, layout.panel.y - 20.0f,
+                                static_cast<float>(noticeSurface->w),
+                                static_cast<float>(noticeSurface->h)};
+        SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 180);
+        SDL_FRect noticeBg = {noticeRect.x - 6.0f, noticeRect.y - 4.0f, noticeRect.w + 12.0f,
+                              noticeRect.h + 8.0f};
+        SDL_RenderFillRect(this->renderer, &noticeBg);
+        SDL_RenderTexture(this->renderer, noticeTexture, nullptr, &noticeRect);
+        SDL_DestroySurface(noticeSurface);
+        SDL_DestroyTexture(noticeTexture);
+      }
+    }
+  }
+
+  { // NPC dialog
+    if (this->activeNpcId != -1 && !this->shopOpen) {
+      const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->activeNpcId);
+      const std::string title = npc.name;
+      std::string line = npc.dialogLine;
+      const QuestLogComponent& questLog =
+          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+      const LevelComponent& level =
+          this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
+          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+      if (!entries.empty()) {
+        line += "\n\nQuests:";
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+          const QuestEntry& entry = entries[i];
+          const QuestDef* def = entry.def;
+          if (!def) {
+            continue;
+          }
+          const std::string prefix =
+              (static_cast<int>(i) == this->activeNpcQuestSelection) ? "> " : "  ";
+          const std::string type =
+              (entry.type == QuestEntryType::Available) ? "[Accept]" : "[Turn In]";
+          line += "\n" + prefix + def->name + " " + type;
+        }
+        line += "\n\nPageUp/PageDown to select";
+        line += "\nPress A to accept, C to turn in";
+      }
+      SDL_Color titleColor = {255, 240, 210, 255};
+      SDL_Color textColor = {235, 235, 235, 255};
+      constexpr float panelWidth = 360.0f;
+      constexpr float panelHeight = 120.0f;
+      constexpr float panelPadding = 10.0f;
+      constexpr float titleOffsetY = 10.0f;
+      constexpr float textOffsetY = 34.0f;
+      constexpr float lineHeight = 16.0f;
+      const float textAreaHeight = panelHeight - textOffsetY - panelPadding;
+      const int maxWidth = static_cast<int>(panelWidth - (panelPadding * 2.0f));
+      const std::vector<std::string> lines = wrapText(this->font, line, maxWidth);
+      const int totalLines = static_cast<int>(lines.size());
+      const int maxVisibleLines =
+          std::max(1, static_cast<int>(std::floor(textAreaHeight / lineHeight)));
+      const float totalHeight = totalLines * lineHeight;
+      const float visibleHeight = maxVisibleLines * lineHeight;
+      const float maxScroll = std::max(0.0f, totalHeight - visibleHeight);
+      this->npcDialogScroll = std::clamp(this->npcDialogScroll, 0.0f, maxScroll);
+      const int startLine = static_cast<int>(std::floor(this->npcDialogScroll / lineHeight));
+      const float lineOffset = std::fmod(this->npcDialogScroll, lineHeight);
+      const int endLine = std::min(totalLines, startLine + maxVisibleLines + 1);
+
+      SDL_Surface* titleSurface =
+          TTF_RenderText_Solid(this->font, title.c_str(), title.length(), titleColor);
+      SDL_FRect panel = {12.0f, WINDOW_HEIGHT - panelHeight - 92.0f, panelWidth, panelHeight};
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 10, 10, 10, 210);
+      SDL_RenderFillRect(this->renderer, &panel);
+      SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 140);
+      SDL_RenderRect(this->renderer, &panel);
+
+      SDL_Texture* titleTexture = SDL_CreateTextureFromSurface(this->renderer, titleSurface);
+      SDL_FRect titleRect = {panel.x + panelPadding, panel.y + titleOffsetY,
+                             static_cast<float>(titleSurface->w),
+                             static_cast<float>(titleSurface->h)};
+      SDL_RenderTexture(this->renderer, titleTexture, nullptr, &titleRect);
+
+      float textY = panel.y + textOffsetY - lineOffset;
+      for (int i = startLine; i < endLine; ++i) {
+        SDL_Surface* lineSurface =
+            TTF_RenderText_Solid(this->font, lines[i].c_str(), lines[i].length(), textColor);
+        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
+        SDL_FRect lineRect = {panel.x + panelPadding, textY,
+                              static_cast<float>(lineSurface->w),
+                              static_cast<float>(lineSurface->h)};
+        if (lineRect.y + lineRect.h >= panel.y + textOffsetY - 2.0f &&
+            lineRect.y <= panel.y + panelHeight - panelPadding) {
+          SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
+        }
+        SDL_DestroyTexture(lineTexture);
+        SDL_DestroySurface(lineSurface);
+        textY += lineHeight;
+      }
+
+      if (maxScroll > 0.0f) {
+        const float trackX = panel.x + panel.w - 8.0f;
+        const float trackY = panel.y + textOffsetY;
+        const float trackH = visibleHeight;
+        const float thumbH = std::max(18.0f, (visibleHeight / totalHeight) * trackH);
+        const float scrollRatio = (maxScroll > 0.0f) ? (this->npcDialogScroll / maxScroll) : 0.0f;
+        const float thumbY = trackY + (trackH - thumbH) * scrollRatio;
+        SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 220);
+        SDL_FRect trackRect = {trackX, trackY, 4.0f, trackH};
+        SDL_RenderFillRect(this->renderer, &trackRect);
+        SDL_SetRenderDrawColor(this->renderer, 200, 200, 200, 220);
+        SDL_FRect thumbRect = {trackX, thumbY, 4.0f, thumbH};
+        SDL_RenderFillRect(this->renderer, &thumbRect);
+      }
+
+      SDL_DestroyTexture(titleTexture);
+      SDL_DestroySurface(titleSurface);
     }
   }
 
@@ -1523,8 +2559,45 @@ void Game::render() {
   { // Minimap overlay
     const TransformComponent& playerTransform =
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
+    const QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    std::vector<MinimapMarker> markers;
+    for (const QuestProgress& progress : questLog.activeQuests) {
+      const QuestDef* def = this->questDatabase->getQuest(progress.questId);
+      if (!def) {
+        continue;
+      }
+      if (!def->turnInNpcName.empty() && progress.completed && !progress.rewardsClaimed) {
+        for (int npcId : this->npcEntityIds) {
+          const NpcComponent& npc = this->registry->getComponent<NpcComponent>(npcId);
+          if (npc.name != def->turnInNpcName) {
+            continue;
+          }
+          const TransformComponent& npcTransform =
+              this->registry->getComponent<TransformComponent>(npcId);
+          const float tileX = npcTransform.position.x / TILE_SIZE;
+          const float tileY = npcTransform.position.y / TILE_SIZE;
+          markers.push_back(MinimapMarker{tileX, tileY, SDL_Color{255, 220, 80, 255}});
+        }
+      }
+      for (const QuestObjectiveProgress& objective : progress.objectives) {
+        if (objective.def.type != QuestObjectiveType::EnterRegion) {
+          continue;
+        }
+        if (objective.currentCount >= objective.def.requiredCount) {
+          continue;
+        }
+        const std::optional<Position> regionCenter =
+            regionCenterByName(*this->map, objective.def.regionName);
+        if (regionCenter.has_value()) {
+          markers.push_back(MinimapMarker{regionCenter->x / TILE_SIZE,
+                                          regionCenter->y / TILE_SIZE,
+                                          SDL_Color{120, 220, 255, 255}});
+        }
+      }
+    }
     this->minimap->render(this->renderer, *this->map, playerTransform.position, WINDOW_WIDTH,
-                          WINDOW_HEIGHT);
+                          WINDOW_HEIGHT, markers);
   }
 
   { // Character stats overlay
@@ -1535,13 +2608,25 @@ void Game::render() {
         this->registry->getComponent<LevelComponent>(this->playerEntityId);
     const StatsComponent& stats =
         this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    const ClassComponent& playerClass =
+        this->registry->getComponent<ClassComponent>(this->playerEntityId);
     const EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
     const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
     this->characterStats->render(this->renderer, this->font, WINDOW_WIDTH, health, mana, level,
-                                 attackPower, stats.strength, stats.dexterity, stats.intellect,
-                                 stats.luck, stats.unspentPoints,
+                                 attackPower, className(playerClass.characterClass),
+                                 stats.strength, stats.gold, stats.dexterity, stats.intellect,
+                                 stats.luck,
+                                 stats.unspentPoints,
                                  this->inventoryUi->isStatsVisible());
+  }
+
+  { // Quest log overlay
+    const QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    this->questLogUi->render(this->renderer, this->font, questLog, *this->questDatabase,
+                             *this->itemDatabase, WINDOW_WIDTH, WINDOW_HEIGHT,
+                             this->questLogVisible, this->questLogScroll);
   }
 
   {
