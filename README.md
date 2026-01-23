@@ -18,6 +18,14 @@ cmake --build build
 scripts/check-build.sh
 ```
 
+### Tests
+
+```bash
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build
+```
+
 ### Git hooks
 
 ```bash

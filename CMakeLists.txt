@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(SPDLOG_BUILD_PIC ON)
+enable_testing()
 
 add_executable(kingdom_of_nin)
 
@@ -55,3 +56,5 @@ add_custom_command(TARGET kingdom_of_nin POST_BUILD
     ${CMAKE_SOURCE_DIR}/assets
     $<TARGET_FILE_DIR:kingdom_of_nin>/assets
 )
+
+add_subdirectory(tests)

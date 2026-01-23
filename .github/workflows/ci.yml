@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxss-dev \
+            libxxf86vm-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libopencv-dev \
+            libfreetype6-dev \
+            libharfbuzz-dev \
+            libgl1-mesa-dev \
+            clang-tidy
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake pkg-config freetype harfbuzz opencv llvm
+
+      - name: Configure and build
+        run: scripts/check-build.sh
+
+      - name: Run tests
+        run: ctest --test-dir build
+
+      - name: Configure clang-tidy
+        run: cmake -S . -B build-tidy -DKINGDOM_OF_NIN_ENABLE_CLANG_TIDY=ON
+
+      - name: Build with clang-tidy
+        run: cmake --build build-tidy
