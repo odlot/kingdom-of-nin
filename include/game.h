@@ -23,6 +23,7 @@
 #include "ui/inventory.h"
 #include "ui/minimap.h"
 #include "ui/quest_log.h"
+#include "ui/shop_panel.h"
 #include "ui/skill_bar.h"
 #include "ui/skill_tree.h"
 #include "quests/quest_database.h"
@@ -43,6 +44,43 @@ public:
   void render();
 
 private:
+  struct InputState {
+    const bool* keyboardState = nullptr;
+    int moveX = 0;
+    int moveY = 0;
+    std::array<bool, 5> skillPressed = {false, false, false, false, false};
+    std::array<bool, 5> skillJustPressed = {false, false, false, false, false};
+    bool pickupPressed = false;
+    bool pickupJustPressed = false;
+    bool interactPressed = false;
+    bool interactJustPressed = false;
+    bool debugPressed = false;
+    bool debugJustPressed = false;
+    bool resurrectPressed = false;
+    bool resurrectJustPressed = false;
+    bool questLogPressed = false;
+    bool questLogJustPressed = false;
+    bool acceptQuestPressed = false;
+    bool acceptQuestJustPressed = false;
+    bool turnInQuestPressed = false;
+    bool turnInQuestJustPressed = false;
+    bool questPrevPressed = false;
+    bool questPrevJustPressed = false;
+    bool questNextPressed = false;
+    bool questNextJustPressed = false;
+    float mouseX = 0.0f;
+    float mouseY = 0.0f;
+    bool mousePressed = false;
+    bool click = false;
+    float mouseWheelDelta = 0.0f;
+  };
+
+  InputState captureInput();
+  void updateNpcInteraction(const InputState& input);
+  void updateAutoTargetAndFacing(const InputState& input, float dt);
+  void updatePlayerAttack(float dt);
+  void updateMobBehavior(float dt);
+
   SDL_Window* window = nullptr;
   SDL_Renderer* renderer = nullptr;
   TTF_Font* font = nullptr;
@@ -51,6 +89,7 @@ private:
   std::unique_ptr<CharacterStats> characterStats;
   std::unique_ptr<Minimap> minimap;
   std::unique_ptr<QuestLog> questLogUi;
+  std::unique_ptr<ShopPanel> shopPanel;
   std::unique_ptr<ItemDatabase> itemDatabase;
   std::unique_ptr<SkillDatabase> skillDatabase;
   std::unique_ptr<SkillTreeDefinition> skillTreeDefinition;
@@ -99,10 +138,7 @@ private:
   bool shopOpen = false;
   bool questLogVisible = false;
   float questLogScroll = 0.0f;
-  std::string shopNotice;
-  float shopNoticeTimer = 0.0f;
-  float shopScroll = 0.0f;
-  float inventoryScroll = 0.0f;
+  ShopPanelState shopPanelState;
   float npcDialogScroll = 0.0f;
   float mouseWheelDelta = 0.0f;
   bool wasMousePressed = false;

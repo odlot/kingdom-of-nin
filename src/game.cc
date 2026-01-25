@@ -24,12 +24,18 @@
 #include "ecs/system/movement_system.h"
 #include "ecs/system/pushback_system.h"
 #include "events/events.h"
+#include "gameplay/projectile_system.h"
+#include "quests/quest_helpers.h"
+#include "ui/quest_marker_helpers.h"
 #include "ui/buff_bar.h"
 #include "ui/floating_text_system.h"
 #include "ui/inventory.h"
 #include "ui/minimap.h"
+#include "ui/quest_log.h"
+#include "ui/render_utils.h"
 #include "ui/skill_bar.h"
 #include "ui/skill_tree.h"
+#include "ui/npc_dialog.h"
 #include "world/generator.h"
 #include "world/region.h"
 #include "world/tile.h"
@@ -61,8 +67,6 @@ constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
 constexpr float PUSHBACK_DURATION = 0.2f;
 constexpr float PLAYER_KNOCKBACK_IMMUNITY_SECONDS = 2.0f;
 constexpr float RESURRECT_RANGE = 28.0f;
-constexpr int SHOP_SELL_DIVISOR = 2;
-constexpr float SHOP_NOTICE_DURATION = 1.6f;
 
 namespace {
 std::optional<Coordinate> firstWalkableInRegion(const Map& map, const Region& region) {
@@ -88,18 +92,6 @@ std::string regionName(RegionType type) {
     return "Dungeon Entrance";
   }
   return "Region";
-}
-
-std::optional<Position> regionCenterByName(const Map& map, const std::string& name) {
-  const std::vector<Region>& regions = map.getRegions();
-  for (const Region& region : regions) {
-    if (regionName(region.type) == name) {
-      const float centerX = (region.x + (region.width / 2.0f)) * TILE_SIZE;
-      const float centerY = (region.y + (region.height / 2.0f)) * TILE_SIZE;
-      return Position(centerX, centerY);
-    }
-  }
-  return std::nullopt;
 }
 
 const char* mobTypeName(MobType type) {
@@ -160,10 +152,6 @@ SDL_Color lootColorForItem(const ItemDef* def) {
   return SDL_Color{200, 200, 200, 255};
 }
 
-int itemPrice(const ItemDef* def) {
-  return def ? def->price : 0;
-}
-
 int regionIndexAt(const Map& map, int tileX, int tileY) {
   const std::vector<Region>& regions = map.getRegions();
   for (std::size_t i = 0; i < regions.size(); ++i) {
@@ -174,160 +162,6 @@ int regionIndexAt(const Map& map, int tileX, int tileY) {
   return -1;
 }
 
-void drawCircle(SDL_Renderer* renderer, const Position& center, float radius,
-                const Position& cameraPosition, SDL_Color color) {
-  constexpr int kSegments = 32;
-  SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-  float prevX = center.x + radius;
-  float prevY = center.y;
-  constexpr float kPi = 3.14159265f;
-  for (int i = 1; i <= kSegments; ++i) {
-    const float angle = static_cast<float>(i) * (2.0f * kPi) / static_cast<float>(kSegments);
-    const float nextX = center.x + radius * std::cos(angle);
-    const float nextY = center.y + radius * std::sin(angle);
-    SDL_RenderLine(renderer, prevX - cameraPosition.x, prevY - cameraPosition.y,
-                   nextX - cameraPosition.x, nextY - cameraPosition.y);
-    prevX = nextX;
-    prevY = nextY;
-  }
-}
-
-void drawFacingArc(SDL_Renderer* renderer, const Position& center, float radius, float facingX,
-                   float facingY, float halfAngle, const Position& cameraPosition,
-                   SDL_Color color) {
-  float fx = facingX;
-  float fy = facingY;
-  const float facingLength = std::sqrt((fx * fx) + (fy * fy));
-  if (facingLength <= 0.001f) {
-    fx = 0.0f;
-    fy = 1.0f;
-  } else {
-    fx /= facingLength;
-    fy /= facingLength;
-  }
-  const float centerAngle = std::atan2(fy, fx);
-  constexpr int kSegments = 16;
-  SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-  float prevX = center.x + radius * std::cos(centerAngle - halfAngle);
-  float prevY = center.y + radius * std::sin(centerAngle - halfAngle);
-  for (int i = 1; i <= kSegments; ++i) {
-    const float t = static_cast<float>(i) / static_cast<float>(kSegments);
-    const float angle = centerAngle - halfAngle + (t * halfAngle * 2.0f);
-    const float nextX = center.x + radius * std::cos(angle);
-    const float nextY = center.y + radius * std::sin(angle);
-    SDL_RenderLine(renderer, prevX - cameraPosition.x, prevY - cameraPosition.y,
-                   nextX - cameraPosition.x, nextY - cameraPosition.y);
-    prevX = nextX;
-    prevY = nextY;
-  }
-  SDL_RenderLine(renderer, center.x - cameraPosition.x, center.y - cameraPosition.y,
-                 center.x + radius * std::cos(centerAngle - halfAngle) - cameraPosition.x,
-                 center.y + radius * std::sin(centerAngle - halfAngle) - cameraPosition.y);
-  SDL_RenderLine(renderer, center.x - cameraPosition.x, center.y - cameraPosition.y,
-                 center.x + radius * std::cos(centerAngle + halfAngle) - cameraPosition.x,
-                 center.y + radius * std::sin(centerAngle + halfAngle) - cameraPosition.y);
-}
-
-std::vector<std::string> wrapText(TTF_Font* font, const std::string& text, int maxWidth) {
-  std::vector<std::string> lines;
-  std::string current;
-  std::string word;
-  auto flushWord = [&]() {
-    if (word.empty()) {
-      return;
-    }
-    std::string candidate = current.empty() ? word : current + " " + word;
-    int width = 0;
-    int height = 0;
-    TTF_GetStringSize(font, candidate.c_str(), candidate.size(), &width, &height);
-    if (width <= maxWidth) {
-      current = std::move(candidate);
-      word.clear();
-      return;
-    }
-    if (!current.empty()) {
-      lines.push_back(current);
-      current.clear();
-    }
-    TTF_GetStringSize(font, word.c_str(), word.size(), &width, &height);
-    if (width <= maxWidth) {
-      current = word;
-      word.clear();
-      return;
-    }
-    std::string chunk;
-    for (char ch : word) {
-      std::string next = chunk + ch;
-      TTF_GetStringSize(font, next.c_str(), next.size(), &width, &height);
-      if (width > maxWidth && !chunk.empty()) {
-        lines.push_back(chunk);
-        chunk.clear();
-      }
-      chunk += ch;
-    }
-    if (!chunk.empty()) {
-      current = chunk;
-    }
-    word.clear();
-  };
-
-  for (char ch : text) {
-    if (ch == '\n') {
-      flushWord();
-      if (!current.empty()) {
-        lines.push_back(current);
-        current.clear();
-      } else {
-        lines.push_back("");
-      }
-      continue;
-    }
-    if (ch == ' ') {
-      flushWord();
-    } else {
-      word += ch;
-    }
-  }
-  flushWord();
-  if (!current.empty()) {
-    lines.push_back(current);
-  }
-  if (lines.empty()) {
-    lines.push_back("");
-  }
-  return lines;
-}
-
-struct ShopLayout {
-  SDL_FRect panel;
-  SDL_FRect shopRect;
-  SDL_FRect inventoryRect;
-  float rowHeight = 16.0f;
-  float columnGap = 12.0f;
-};
-
-enum class QuestEntryType { Available = 0, TurnIn };
-
-struct QuestEntry {
-  QuestEntryType type = QuestEntryType::Available;
-  const QuestDef* def = nullptr;
-};
-
-ShopLayout shopLayout(int windowWidth, int windowHeight) {
-  constexpr float panelWidth = 520.0f;
-  constexpr float panelHeight = 200.0f;
-  const float x = (windowWidth - panelWidth) / 2.0f;
-  const float y = windowHeight - panelHeight - 120.0f;
-  ShopLayout layout;
-  layout.panel = SDL_FRect{x, y, panelWidth, panelHeight};
-  const float listWidth = (panelWidth - (layout.columnGap * 3.0f)) / 2.0f;
-  layout.shopRect = SDL_FRect{x + layout.columnGap, y + 36.0f, listWidth,
-                              panelHeight - 48.0f};
-  layout.inventoryRect = SDL_FRect{x + (layout.columnGap * 2.0f) + listWidth, y + 36.0f,
-                                   listWidth, panelHeight - 48.0f};
-  return layout;
-}
-
 bool isShopNpc(int npcId, const std::vector<int>& shopNpcIds) {
   return std::find(shopNpcIds.begin(), shopNpcIds.end(), npcId) != shopNpcIds.end();
 }
@@ -336,30 +170,81 @@ bool pointInRect(float x, float y, const SDL_FRect& rect) {
   return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
 }
 
-std::vector<QuestEntry> buildNpcQuestEntries(const std::string& npcName,
-                                             const QuestSystem& questSystem,
-                                             const QuestDatabase& questDatabase,
-                                             const QuestLogComponent& questLog,
-                                             const LevelComponent& level) {
-  std::vector<QuestEntry> entries;
-  const std::vector<const QuestDef*> available =
-      questSystem.availableQuests(npcName, level, questLog);
-  for (const QuestDef* def : available) {
-    entries.push_back(QuestEntry{QuestEntryType::Available, def});
-  }
-  for (const QuestProgress& progress : questLog.activeQuests) {
-    const QuestDef* def = questDatabase.getQuest(progress.questId);
-    if (!def || def->turnInNpcName != npcName) {
-      continue;
-    }
-    if (progress.completed && !progress.rewardsClaimed) {
-      entries.push_back(QuestEntry{QuestEntryType::TurnIn, def});
-    }
-  }
-  return entries;
-}
-
 } // namespace
+
+Game::InputState Game::captureInput() {
+  InputState input;
+  input.keyboardState = SDL_GetKeyboardState(nullptr);
+
+  int x = 0;
+  int y = 0;
+  if (input.keyboardState[SDL_SCANCODE_LEFT]) {
+    x = -1;
+  }
+  if (input.keyboardState[SDL_SCANCODE_DOWN]) {
+    y = 1;
+  }
+  if (input.keyboardState[SDL_SCANCODE_UP]) {
+    y = -1;
+  }
+  if (input.keyboardState[SDL_SCANCODE_RIGHT]) {
+    x = 1;
+  }
+  input.moveX = x;
+  input.moveY = y;
+
+  input.pickupPressed = input.keyboardState[SDL_SCANCODE_F];
+  input.interactPressed = input.keyboardState[SDL_SCANCODE_T];
+  input.debugPressed = input.keyboardState[SDL_SCANCODE_D];
+  input.resurrectPressed = input.keyboardState[SDL_SCANCODE_R];
+  input.questLogPressed = input.keyboardState[SDL_SCANCODE_Q];
+  input.acceptQuestPressed = input.keyboardState[SDL_SCANCODE_A];
+  input.turnInQuestPressed = input.keyboardState[SDL_SCANCODE_C];
+  input.questPrevPressed = input.keyboardState[SDL_SCANCODE_PAGEUP];
+  input.questNextPressed = input.keyboardState[SDL_SCANCODE_PAGEDOWN];
+
+  const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2,
+                                                 SDL_SCANCODE_3, SDL_SCANCODE_4,
+                                                 SDL_SCANCODE_5};
+  for (std::size_t i = 0; i < skillKeys.size(); ++i) {
+    input.skillPressed[i] = input.keyboardState[skillKeys[i]];
+    input.skillJustPressed[i] = input.skillPressed[i] && !this->wasSkillPressed[i];
+    this->wasSkillPressed[i] = input.skillPressed[i];
+  }
+
+  float mouseX = 0.0f;
+  float mouseY = 0.0f;
+  const Uint32 mouseState = SDL_GetMouseState(&mouseX, &mouseY);
+  input.mouseX = mouseX;
+  input.mouseY = mouseY;
+  input.mousePressed = (mouseState & SDL_BUTTON_LMASK) != 0;
+  input.click = input.mousePressed && !this->wasMousePressed;
+  this->wasMousePressed = input.mousePressed;
+
+  input.pickupJustPressed = input.pickupPressed && !this->wasPickupPressed;
+  this->wasPickupPressed = input.pickupPressed;
+  input.interactJustPressed = input.interactPressed && !this->wasInteractPressed;
+  this->wasInteractPressed = input.interactPressed;
+  input.debugJustPressed = input.debugPressed && !this->wasDebugPressed;
+  this->wasDebugPressed = input.debugPressed;
+  input.resurrectJustPressed = input.resurrectPressed && !this->wasResurrectPressed;
+  this->wasResurrectPressed = input.resurrectPressed;
+  input.questLogJustPressed = input.questLogPressed && !this->wasQuestLogPressed;
+  this->wasQuestLogPressed = input.questLogPressed;
+  input.acceptQuestJustPressed = input.acceptQuestPressed && !this->wasAcceptQuestPressed;
+  this->wasAcceptQuestPressed = input.acceptQuestPressed;
+  input.turnInQuestJustPressed = input.turnInQuestPressed && !this->wasTurnInQuestPressed;
+  this->wasTurnInQuestPressed = input.turnInQuestPressed;
+  input.questPrevJustPressed = input.questPrevPressed && !this->wasQuestPrevPressed;
+  this->wasQuestPrevPressed = input.questPrevPressed;
+  input.questNextJustPressed = input.questNextPressed && !this->wasQuestNextPressed;
+  this->wasQuestNextPressed = input.questNextPressed;
+
+  input.mouseWheelDelta = this->mouseWheelDelta;
+  this->mouseWheelDelta = 0.0f;
+
+  return input;
+}
 
 int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& equipment,
                        const ItemDatabase& database) {
@@ -577,6 +462,411 @@ Position centerForEntity(const TransformComponent& transform, const CollisionCom
 }
 
 void applyPushback(Registry& registry, int targetEntityId, const Position& fromPosition,
+                   float distance, float duration);
+int createProjectileEntity(Registry& registry, const Position& position, float velocityX,
+                           float velocityY, float range, int sourceEntityId, int targetEntityId,
+                           int damage, bool isCrit, float radius, float trailLength,
+                           SDL_Color color,
+                           std::vector<int>& projectileEntityIds);
+void moveEntityToward(const Map& map, TransformComponent& transform,
+                      const CollisionComponent& collision, float speed, const Position& target,
+                      float dt);
+
+void Game::updateNpcInteraction(const InputState& input) {
+  const TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const float rangeSquared = NPC_INTERACT_RANGE * NPC_INTERACT_RANGE;
+  int closestNpcId = -1;
+  float closestDist = rangeSquared;
+  for (int npcEntityId : this->npcEntityIds) {
+    const TransformComponent& npcTransform =
+        this->registry->getComponent<TransformComponent>(npcEntityId);
+    const CollisionComponent& npcCollision =
+        this->registry->getComponent<CollisionComponent>(npcEntityId);
+    const Position npcCenter = centerForEntity(npcTransform, npcCollision);
+    const float dist = squaredDistance(playerCenter, npcCenter);
+    if (dist <= closestDist) {
+      closestDist = dist;
+      closestNpcId = npcEntityId;
+    }
+  }
+  this->currentNpcId = closestNpcId;
+  if (this->activeNpcId != -1) {
+    const TransformComponent& activeTransform =
+        this->registry->getComponent<TransformComponent>(this->activeNpcId);
+    const CollisionComponent& activeCollision =
+        this->registry->getComponent<CollisionComponent>(this->activeNpcId);
+    const Position activeCenter = centerForEntity(activeTransform, activeCollision);
+    if (squaredDistance(playerCenter, activeCenter) > rangeSquared) {
+      this->activeNpcId = -1;
+      this->shopOpen = false;
+    }
+  }
+  if (input.interactJustPressed) {
+    if (this->activeNpcId != -1) {
+      this->activeNpcId = -1;
+      this->shopOpen = false;
+    } else if (this->currentNpcId != -1) {
+      this->activeNpcId = this->currentNpcId;
+      this->npcDialogScroll = 0.0f;
+      this->shopOpen = isShopNpc(this->activeNpcId, this->shopNpcIds);
+      this->activeNpcQuestSelection = 0;
+      QuestLogComponent& questLog =
+          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+      StatsComponent& stats =
+          this->registry->getComponent<StatsComponent>(this->playerEntityId);
+      LevelComponent& level =
+          this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      InventoryComponent& inventory =
+          this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+      const NpcComponent& npc =
+          this->registry->getComponent<NpcComponent>(this->activeNpcId);
+      const std::vector<std::string> turnedIn =
+          this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
+      if (!turnedIn.empty()) {
+        const TransformComponent& playerTransform =
+            this->registry->getComponent<TransformComponent>(this->playerEntityId);
+        const CollisionComponent& playerCollision =
+            this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+        const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+        for (const std::string& questName : turnedIn) {
+          this->eventBus->emitFloatingTextEvent(
+              FloatingTextEvent{"Completed: " + questName, playerCenter,
+                                FloatingTextKind::Info});
+        }
+      }
+    }
+  }
+  if (this->activeNpcId != -1 && !this->shopOpen && input.acceptQuestJustPressed) {
+    QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const NpcComponent& npc =
+        this->registry->getComponent<NpcComponent>(this->activeNpcId);
+    const std::vector<QuestEntry> entries = buildNpcQuestEntries(
+        npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+    if (!entries.empty() &&
+        this->activeNpcQuestSelection >= 0 &&
+        this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
+        entries[this->activeNpcQuestSelection].type == QuestEntryType::Available) {
+      const QuestDef* def = entries[this->activeNpcQuestSelection].def;
+      if (def) {
+        this->questSystem->addQuest(questLog, level, def->id);
+        const TransformComponent& playerTransform =
+            this->registry->getComponent<TransformComponent>(this->playerEntityId);
+        const CollisionComponent& playerCollision =
+            this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+        const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+        this->eventBus->emitFloatingTextEvent(
+            FloatingTextEvent{"Accepted: " + def->name, playerCenter,
+                              FloatingTextKind::Info});
+      }
+    }
+  }
+  if (this->activeNpcId != -1 && !this->shopOpen && input.turnInQuestJustPressed) {
+    QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    StatsComponent& stats =
+        this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    const NpcComponent& npc =
+        this->registry->getComponent<NpcComponent>(this->activeNpcId);
+    const std::vector<QuestEntry> entries = buildNpcQuestEntries(
+        npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+    if (!entries.empty() &&
+        this->activeNpcQuestSelection >= 0 &&
+        this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
+        entries[this->activeNpcQuestSelection].type == QuestEntryType::TurnIn) {
+      const QuestDef* def = entries[this->activeNpcQuestSelection].def;
+      if (def) {
+        const std::vector<std::string> turnedIn =
+            this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
+        if (!turnedIn.empty()) {
+          const TransformComponent& playerTransform =
+              this->registry->getComponent<TransformComponent>(this->playerEntityId);
+          const CollisionComponent& playerCollision =
+              this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+          const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+          for (const std::string& questName : turnedIn) {
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{"Completed: " + questName, playerCenter,
+                                  FloatingTextKind::Info});
+          }
+        }
+      }
+    }
+  }
+  if (this->activeNpcId != -1 && !this->shopOpen &&
+      (input.questPrevJustPressed || input.questNextJustPressed)) {
+    QuestLogComponent& questLog =
+        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+    LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const NpcComponent& npc =
+        this->registry->getComponent<NpcComponent>(this->activeNpcId);
+    const std::vector<QuestEntry> entries = buildNpcQuestEntries(
+        npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+    if (!entries.empty()) {
+      const int count = static_cast<int>(entries.size());
+      if (input.questNextJustPressed) {
+        this->activeNpcQuestSelection = (this->activeNpcQuestSelection + 1) % count;
+      } else if (input.questPrevJustPressed) {
+        this->activeNpcQuestSelection =
+            (this->activeNpcQuestSelection - 1 + count) % count;
+      }
+    } else {
+      this->activeNpcQuestSelection = 0;
+    }
+  }
+  if (this->activeNpcId != -1 && !this->shopOpen && input.mouseWheelDelta != 0.0f) {
+    this->npcDialogScroll -= input.mouseWheelDelta * 18.0f;
+  }
+}
+
+void Game::updateAutoTargetAndFacing(const InputState& input, float dt) {
+  if (this->isPlayerGhost) {
+    this->currentAutoTargetId = -1;
+    return;
+  }
+
+  const TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  const EquipmentComponent& equipment =
+      this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+  const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
+  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const float range = attackProfile.range * AUTO_TARGET_RANGE_MULTIPLIER;
+  const float rangeSquared = range * range;
+  int closestMobId = -1;
+  float closestDist = rangeSquared;
+  Position closestCenter;
+  for (int mobEntityId : this->mobEntityIds) {
+    const HealthComponent& mobHealth =
+        this->registry->getComponent<HealthComponent>(mobEntityId);
+    if (mobHealth.current <= 0) {
+      continue;
+    }
+    if (this->respawnSystem->isSpawning(mobEntityId)) {
+      continue;
+    }
+    const TransformComponent& mobTransform =
+        this->registry->getComponent<TransformComponent>(mobEntityId);
+    const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
+                             mobTransform.position.y + (TILE_SIZE / 2.0f));
+    const float dist = squaredDistance(playerCenter, mobCenter);
+    if (dist <= closestDist) {
+      closestDist = dist;
+      closestMobId = mobEntityId;
+      closestCenter = mobCenter;
+    }
+  }
+
+  this->currentAutoTargetId = closestMobId;
+  float desiredAngle = this->facingAngle;
+  bool hasFacingTarget = false;
+  if (closestMobId != -1) {
+    desiredAngle =
+        std::atan2(closestCenter.y - playerCenter.y, closestCenter.x - playerCenter.x);
+    hasFacingTarget = true;
+  } else if (input.moveX != 0 || input.moveY != 0) {
+    desiredAngle = std::atan2(static_cast<float>(input.moveY),
+                              static_cast<float>(input.moveX));
+    hasFacingTarget = true;
+  }
+  if (hasFacingTarget) {
+    const float diff = shortestAngleDiff(this->facingAngle, desiredAngle);
+    const float maxStep = FACING_TURN_SPEED * dt;
+    if (std::abs(diff) <= maxStep) {
+      this->facingAngle = desiredAngle;
+    } else {
+      this->facingAngle += (diff > 0.0f ? maxStep : -maxStep);
+    }
+    this->facingX = std::cos(this->facingAngle);
+    this->facingY = std::sin(this->facingAngle);
+  }
+}
+
+void Game::updatePlayerAttack(float dt) {
+  auto applyPlayerDamageToMob = [&](int mobEntityId, int damage, bool isCrit,
+                                    const Position& hitPosition, const Position& fromPosition) {
+    if (mobEntityId == -1) {
+      return;
+    }
+    HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
+    if (mobHealth.current <= 0 || this->respawnSystem->isSpawning(mobEntityId)) {
+      return;
+    }
+    mobHealth.current = std::max(0, mobHealth.current - damage);
+    applyPushback(*this->registry, mobEntityId, fromPosition, PUSHBACK_DISTANCE,
+                  PUSHBACK_DURATION);
+    this->eventBus->emitDamageEvent(
+        DamageEvent{this->playerEntityId, mobEntityId, damage, hitPosition});
+    this->eventBus->emitFloatingTextEvent(
+        FloatingTextEvent{std::to_string(damage), hitPosition,
+                          isCrit ? FloatingTextKind::CritDamage : FloatingTextKind::Damage});
+    if (mobHealth.current == 0) {
+      LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+      this->eventBus->emitMobKilledEvent(MobKilledEvent{mob.type, mobEntityId});
+      level.experience += mob.experience;
+      this->eventBus->emitFloatingTextEvent(
+          FloatingTextEvent{"XP +" + std::to_string(mob.experience), hitPosition,
+                            FloatingTextKind::Info});
+      GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
+      mobGraphic.color = SDL_Color({80, 80, 80, 255});
+    }
+  };
+
+  updateProjectiles(
+      dt, *this->registry, *this->map, *this->respawnSystem, this->projectileEntityIds,
+      this->playerEntityId,
+      [&](int mobId, int damage, bool isCrit, const Position& hitPosition,
+          const Position& fromPosition) {
+        applyPlayerDamageToMob(mobId, damage, isCrit, hitPosition, fromPosition);
+      });
+
+  if (this->isPlayerGhost || this->attackCooldownRemaining > 0.0f) {
+    return;
+  }
+  if (this->currentAutoTargetId == -1) {
+    return;
+  }
+
+  const TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  const StatsComponent& stats =
+      this->registry->getComponent<StatsComponent>(this->playerEntityId);
+  const EquipmentComponent& equipment =
+      this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+  const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
+  const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
+  std::uniform_real_distribution<float> critRoll(0.0f, 1.0f);
+  const bool isCrit = critRoll(this->rng) <= PLAYER_CRIT_CHANCE;
+  const int attackDamage =
+      isCrit ? static_cast<int>(std::round(attackPower * PLAYER_CRIT_MULTIPLIER)) : attackPower;
+
+  const TransformComponent& mobTransform =
+      this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
+  const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
+                           mobTransform.position.y + (TILE_SIZE / 2.0f));
+  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const float rangeSquared = attackProfile.range * attackProfile.range;
+  if (squaredDistance(playerCenter, mobCenter) > rangeSquared) {
+    return;
+  }
+
+  if (attackProfile.isRanged) {
+    float dx = mobCenter.x - playerCenter.x;
+    float dy = mobCenter.y - playerCenter.y;
+    const float length = std::sqrt((dx * dx) + (dy * dy));
+    if (length > 0.001f) {
+      dx /= length;
+      dy /= length;
+      const float spawnOffset =
+          (playerCollision.width / 2.0f) + attackProfile.projectileRadius + 4.0f;
+      const Position spawnPosition(playerCenter.x + (dx * spawnOffset),
+                                   playerCenter.y + (dy * spawnOffset));
+      createProjectileEntity(*this->registry, spawnPosition,
+                             dx * attackProfile.projectileSpeed,
+                             dy * attackProfile.projectileSpeed, attackProfile.range,
+                             this->playerEntityId, this->currentAutoTargetId, attackDamage,
+                             isCrit, attackProfile.projectileRadius,
+                             attackProfile.projectileTrailLength,
+                             attackProfile.projectileColor, this->projectileEntityIds);
+      this->attackCooldownRemaining = attackProfile.cooldown;
+    }
+  } else {
+    applyPlayerDamageToMob(this->currentAutoTargetId, attackDamage, isCrit, mobCenter,
+                           playerCenter);
+    this->attackCooldownRemaining = attackProfile.cooldown;
+  }
+}
+
+void Game::updateMobBehavior(float dt) {
+  const TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const int playerTileX = static_cast<int>(playerCenter.x / TILE_SIZE);
+  const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
+
+  for (int mobEntityId : this->mobEntityIds) {
+    const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
+    if (mobHealth.current <= 0) {
+      continue;
+    }
+    if (this->respawnSystem->isSpawning(mobEntityId)) {
+      continue;
+    }
+    TransformComponent& mobTransform =
+        this->registry->getComponent<TransformComponent>(mobEntityId);
+    const CollisionComponent& mobCollision =
+        this->registry->getComponent<CollisionComponent>(mobEntityId);
+    MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
+    const Position mobCenter = centerForEntity(mobTransform, mobCollision);
+    const HealthComponent& playerHealth =
+        this->registry->getComponent<HealthComponent>(this->playerEntityId);
+    const bool playerAlive = !this->isPlayerGhost && playerHealth.current > 0;
+    const bool playerInRegion =
+        playerTileX >= mob.regionX && playerTileX < mob.regionX + mob.regionWidth &&
+        playerTileY >= mob.regionY && playerTileY < mob.regionY + mob.regionHeight;
+    const float distToPlayer = squaredDistance(mobCenter, playerCenter);
+
+    const Position homePosition(mob.homeX * TILE_SIZE, mob.homeY * TILE_SIZE);
+    const Position homeCenter(homePosition.x + (mobCollision.width / 2.0f),
+                              homePosition.y + (mobCollision.height / 2.0f));
+    const float distToHome = squaredDistance(mobCenter, homeCenter);
+
+    std::optional<Position> target;
+    if (playerAlive && playerInRegion && distToPlayer <= (mob.aggroRange * mob.aggroRange)) {
+      target = playerTransform.position;
+    } else if (distToHome > 4.0f) {
+      target = homePosition;
+    }
+
+    if (target.has_value()) {
+      moveEntityToward(*this->map, mobTransform, mobCollision, mob.speed, *target, dt);
+    }
+
+    mob.attackTimer = std::max(0.0f, mob.attackTimer - dt);
+    if (mob.attackTimer <= 0.0f) {
+      const float attackRangeSquared = mob.attackRange * mob.attackRange;
+      if (playerAlive && squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
+        HealthComponent& playerHealth =
+            this->registry->getComponent<HealthComponent>(this->playerEntityId);
+        if (playerHealth.current > 0) {
+          playerHealth.current = std::max(0, playerHealth.current - mob.attackDamage);
+          this->eventBus->emitDamageEvent(
+              DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
+          this->eventBus->emitFloatingTextEvent(
+              FloatingTextEvent{"-" + std::to_string(mob.attackDamage), playerCenter,
+                                FloatingTextKind::Damage});
+          if (this->playerKnockbackImmunityRemaining <= 0.0f) {
+            applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
+                          PUSHBACK_DURATION);
+            this->playerKnockbackImmunityRemaining = PLAYER_KNOCKBACK_IMMUNITY_SECONDS;
+          }
+          this->playerHitFlashTimer = 0.2f;
+          mob.attackTimer = mob.attackCooldown;
+        }
+      }
+    }
+  }
+}
+
+void applyPushback(Registry& registry, int targetEntityId, const Position& fromPosition,
                    float distance, float duration) {
   TransformComponent& targetTransform = registry.getComponent<TransformComponent>(targetEntityId);
   const CollisionComponent& targetCollision =
@@ -730,6 +1020,7 @@ Game::Game() {
   this->respawnSystem = std::make_unique<RespawnSystem>();
   this->inventoryUi = std::make_unique<Inventory>();
   this->characterStats = std::make_unique<CharacterStats>();
+  this->shopPanel = std::make_unique<ShopPanel>();
   this->skillBar = std::make_unique<SkillBar>();
   this->buffBar = std::make_unique<BuffBar>();
   this->skillTree = std::make_unique<SkillTree>();
@@ -942,61 +1233,32 @@ void Game::update(float dt) {
         std::max(0.0f, this->playerKnockbackImmunityRemaining - dt);
   }
   this->floatingTextSystem->update(dt);
-  this->shopNoticeTimer = std::max(0.0f, this->shopNoticeTimer - dt);
+  this->shopPanel->update(dt, this->shopPanelState);
   this->playerHitFlashTimer = std::max(0.0f, this->playerHitFlashTimer - dt);
   this->respawnSystem->update(dt, *this->map, *this->registry, this->mobEntityIds);
 
-  int x = 0;
-  int y = 0;
-  const bool* keyboardState = SDL_GetKeyboardState(nullptr);
-  if (keyboardState[SDL_SCANCODE_LEFT]) {
-    x = -1;
-  }
-  if (keyboardState[SDL_SCANCODE_DOWN]) {
-    y = 1;
-  }
-  if (keyboardState[SDL_SCANCODE_UP]) {
-    y = -1;
-  }
-  if (keyboardState[SDL_SCANCODE_RIGHT]) {
-    x = 1;
-  }
-  auto result = std::make_pair(x, y);
-
-  const bool pickupPressed = keyboardState[SDL_SCANCODE_F];
-  const bool interactPressed = keyboardState[SDL_SCANCODE_T];
-  const bool debugPressed = keyboardState[SDL_SCANCODE_D];
-  const bool resurrectPressed = keyboardState[SDL_SCANCODE_R];
-  const bool questLogPressed = keyboardState[SDL_SCANCODE_Q];
-  const bool acceptQuestPressed = keyboardState[SDL_SCANCODE_A];
-  const bool turnInQuestPressed = keyboardState[SDL_SCANCODE_C];
-  const bool questPrevPressed = keyboardState[SDL_SCANCODE_PAGEUP];
-  const bool questNextPressed = keyboardState[SDL_SCANCODE_PAGEDOWN];
-  const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3,
-                                                 SDL_SCANCODE_4, SDL_SCANCODE_5};
-  float mouseX = 0.0f;
-  float mouseY = 0.0f;
-  const Uint32 mouseState = SDL_GetMouseState(&mouseX, &mouseY);
-  const bool mousePressed = (mouseState & SDL_BUTTON_LMASK) != 0;
+  const InputState input = captureInput();
+  auto result = std::make_pair(input.moveX, input.moveY);
   {
     InventoryComponent& inventory =
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    this->inventoryUi->handleInput(keyboardState, static_cast<int>(mouseX),
-                                   static_cast<int>(mouseY), mousePressed, inventory, equipment,
-                                   *this->itemDatabase);
+    this->inventoryUi->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
+                                   static_cast<int>(input.mouseY), input.mousePressed, inventory,
+                                   equipment, *this->itemDatabase);
   }
   {
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    this->characterStats->handleInput(static_cast<int>(mouseX), static_cast<int>(mouseY),
-                                      mousePressed, stats, this->inventoryUi->isStatsVisible());
+    this->characterStats->handleInput(static_cast<int>(input.mouseX),
+                                      static_cast<int>(input.mouseY), input.mousePressed, stats,
+                                      this->inventoryUi->isStatsVisible());
   }
   {
     SkillTreeComponent& skillTree =
         this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
-    this->skillTree->handleInput(keyboardState, static_cast<int>(mouseX),
-                                 static_cast<int>(mouseY), mousePressed, skillTree,
+    this->skillTree->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
+                                 static_cast<int>(input.mouseY), input.mousePressed, skillTree,
                                  *this->skillTreeDefinition, WINDOW_WIDTH);
   }
 
@@ -1024,8 +1286,7 @@ void Game::update(float dt) {
       if (slot.cooldownRemaining > 0.0f) {
         slot.cooldownRemaining = std::max(0.0f, slot.cooldownRemaining - dt);
       }
-      const bool pressed = keyboardState[skillKeys[i]];
-      if (pressed && !this->wasSkillPressed[i]) {
+      if (input.skillJustPressed[i]) {
         const SkillDef* def =
             (slot.skillId > 0) ? this->skillDatabase->getSkill(slot.skillId) : nullptr;
         const bool unlocked = def && isSkillUnlocked(skillTree, def->id);
@@ -1038,10 +1299,9 @@ void Game::update(float dt) {
           }
         }
       }
-      this->wasSkillPressed[i] = pressed;
     }
   }
-  if (!this->isPlayerGhost && pickupPressed && !this->wasPickupPressed) {
+  if (!this->isPlayerGhost && input.pickupJustPressed) {
     InventoryComponent& inventory =
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     const TransformComponent& playerTransform =
@@ -1085,478 +1345,33 @@ void Game::update(float dt) {
       }
     }
   }
-  this->wasPickupPressed = pickupPressed;
-  if (questLogPressed && !this->wasQuestLogPressed) {
+  if (input.questLogJustPressed) {
     this->questLogVisible = !this->questLogVisible;
   }
-  this->wasQuestLogPressed = questLogPressed;
-  const bool acceptQuestJustPressed = acceptQuestPressed && !this->wasAcceptQuestPressed;
-  const bool turnInQuestJustPressed = turnInQuestPressed && !this->wasTurnInQuestPressed;
-  const bool questPrevJustPressed = questPrevPressed && !this->wasQuestPrevPressed;
-  const bool questNextJustPressed = questNextPressed && !this->wasQuestNextPressed;
-  this->wasAcceptQuestPressed = acceptQuestPressed;
-  this->wasTurnInQuestPressed = turnInQuestPressed;
-  this->wasQuestPrevPressed = questPrevPressed;
-  this->wasQuestNextPressed = questNextPressed;
-  const bool interactJustPressed = interactPressed && !this->wasInteractPressed;
-  this->wasInteractPressed = interactPressed;
-  if (debugPressed && !this->wasDebugPressed) {
+  if (input.debugJustPressed) {
     this->showDebugMobRanges = !this->showDebugMobRanges;
   }
-  this->wasDebugPressed = debugPressed;
 
-  {
-    const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-    const CollisionComponent& playerCollision =
-        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-    const float rangeSquared = NPC_INTERACT_RANGE * NPC_INTERACT_RANGE;
-    int closestNpcId = -1;
-    float closestDist = rangeSquared;
-    for (int npcEntityId : this->npcEntityIds) {
-      const TransformComponent& npcTransform =
-          this->registry->getComponent<TransformComponent>(npcEntityId);
-      const CollisionComponent& npcCollision =
-          this->registry->getComponent<CollisionComponent>(npcEntityId);
-      const Position npcCenter = centerForEntity(npcTransform, npcCollision);
-      const float dist = squaredDistance(playerCenter, npcCenter);
-      if (dist <= closestDist) {
-        closestDist = dist;
-        closestNpcId = npcEntityId;
-      }
-    }
-    this->currentNpcId = closestNpcId;
-    if (this->activeNpcId != -1) {
-      const TransformComponent& activeTransform =
-          this->registry->getComponent<TransformComponent>(this->activeNpcId);
-      const CollisionComponent& activeCollision =
-          this->registry->getComponent<CollisionComponent>(this->activeNpcId);
-      const Position activeCenter = centerForEntity(activeTransform, activeCollision);
-      if (squaredDistance(playerCenter, activeCenter) > rangeSquared) {
-        this->activeNpcId = -1;
-        this->shopOpen = false;
-      }
-    }
-    if (interactJustPressed) {
-      if (this->activeNpcId != -1) {
-        this->activeNpcId = -1;
-        this->shopOpen = false;
-      } else if (this->currentNpcId != -1) {
-        this->activeNpcId = this->currentNpcId;
-        this->npcDialogScroll = 0.0f;
-        this->shopOpen = isShopNpc(this->activeNpcId, this->shopNpcIds);
-        this->activeNpcQuestSelection = 0;
-        QuestLogComponent& questLog =
-            this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-        StatsComponent& stats =
-            this->registry->getComponent<StatsComponent>(this->playerEntityId);
-        LevelComponent& level =
-            this->registry->getComponent<LevelComponent>(this->playerEntityId);
-        InventoryComponent& inventory =
-            this->registry->getComponent<InventoryComponent>(this->playerEntityId);
-        const NpcComponent& npc =
-            this->registry->getComponent<NpcComponent>(this->activeNpcId);
-        const std::vector<std::string> turnedIn =
-            this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
-        if (!turnedIn.empty()) {
-          const TransformComponent& playerTransform =
-              this->registry->getComponent<TransformComponent>(this->playerEntityId);
-          const CollisionComponent& playerCollision =
-              this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-          const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-          for (const std::string& questName : turnedIn) {
-            this->eventBus->emitFloatingTextEvent(
-                FloatingTextEvent{"Completed: " + questName, playerCenter,
-                                  FloatingTextKind::Info});
-          }
-        }
-      }
-    }
-    if (this->activeNpcId != -1 && !this->shopOpen && acceptQuestJustPressed) {
-      QuestLogComponent& questLog =
-          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-      LevelComponent& level =
-          this->registry->getComponent<LevelComponent>(this->playerEntityId);
-      const NpcComponent& npc =
-          this->registry->getComponent<NpcComponent>(this->activeNpcId);
-      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
-          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
-      if (!entries.empty() &&
-          this->activeNpcQuestSelection >= 0 &&
-          this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
-          entries[this->activeNpcQuestSelection].type == QuestEntryType::Available) {
-        const QuestDef* def = entries[this->activeNpcQuestSelection].def;
-        if (def) {
-          this->questSystem->addQuest(questLog, level, def->id);
-          const TransformComponent& playerTransform =
-              this->registry->getComponent<TransformComponent>(this->playerEntityId);
-          const CollisionComponent& playerCollision =
-              this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-          const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-          this->eventBus->emitFloatingTextEvent(
-            FloatingTextEvent{"Accepted: " + def->name, playerCenter,
-                              FloatingTextKind::Info});
-        }
-      }
-    }
-    if (this->activeNpcId != -1 && !this->shopOpen && turnInQuestJustPressed) {
-      QuestLogComponent& questLog =
-          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-      StatsComponent& stats =
-          this->registry->getComponent<StatsComponent>(this->playerEntityId);
-      LevelComponent& level =
-          this->registry->getComponent<LevelComponent>(this->playerEntityId);
-      InventoryComponent& inventory =
-          this->registry->getComponent<InventoryComponent>(this->playerEntityId);
-      const NpcComponent& npc =
-          this->registry->getComponent<NpcComponent>(this->activeNpcId);
-      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
-          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
-      if (!entries.empty() &&
-          this->activeNpcQuestSelection >= 0 &&
-          this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
-          entries[this->activeNpcQuestSelection].type == QuestEntryType::TurnIn) {
-        const QuestDef* def = entries[this->activeNpcQuestSelection].def;
-        if (def) {
-          const std::vector<std::string> turnedIn =
-              this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
-      if (!turnedIn.empty()) {
-        const TransformComponent& playerTransform =
-            this->registry->getComponent<TransformComponent>(this->playerEntityId);
-        const CollisionComponent& playerCollision =
-            this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-        const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-        for (const std::string& questName : turnedIn) {
-          this->eventBus->emitFloatingTextEvent(
-              FloatingTextEvent{"Completed: " + questName, playerCenter,
-                                FloatingTextKind::Info});
-        }
-      }
-        }
-      }
-    }
-    if (this->activeNpcId != -1 && !this->shopOpen &&
-        (questPrevJustPressed || questNextJustPressed)) {
-      QuestLogComponent& questLog =
-          this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-      LevelComponent& level =
-          this->registry->getComponent<LevelComponent>(this->playerEntityId);
-      const NpcComponent& npc =
-          this->registry->getComponent<NpcComponent>(this->activeNpcId);
-      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
-          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
-      if (!entries.empty()) {
-        const int count = static_cast<int>(entries.size());
-        if (questNextJustPressed) {
-          this->activeNpcQuestSelection = (this->activeNpcQuestSelection + 1) % count;
-        } else if (questPrevJustPressed) {
-          this->activeNpcQuestSelection =
-              (this->activeNpcQuestSelection - 1 + count) % count;
-        }
-      } else {
-        this->activeNpcQuestSelection = 0;
-      }
-    }
-    if (this->activeNpcId != -1 && !this->shopOpen && this->mouseWheelDelta != 0.0f) {
-      this->npcDialogScroll -= this->mouseWheelDelta * 18.0f;
-    }
-  }
-  const bool click = mousePressed && !this->wasMousePressed;
-  this->wasMousePressed = mousePressed;
+  updateNpcInteraction(input);
   if (this->shopOpen && this->activeNpcId != -1) {
     ShopComponent& shop = this->registry->getComponent<ShopComponent>(this->activeNpcId);
     InventoryComponent& inventory =
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    const ShopLayout layout = shopLayout(WINDOW_WIDTH, WINDOW_HEIGHT);
-    const int shopVisibleRows =
-        std::max(1, static_cast<int>(std::floor(layout.shopRect.h / layout.rowHeight)));
-    const int invVisibleRows =
-        std::max(1, static_cast<int>(std::floor(layout.inventoryRect.h / layout.rowHeight)));
-    const int shopMaxScrollRows =
-        std::max(0, static_cast<int>(shop.stock.size()) - shopVisibleRows);
-    const int invMaxScrollRows =
-        std::max(0, static_cast<int>(inventory.items.size()) - invVisibleRows);
-
-    if (this->mouseWheelDelta != 0.0f) {
-      if (pointInRect(mouseX, mouseY, layout.shopRect)) {
-        this->shopScroll -= this->mouseWheelDelta * layout.rowHeight;
-      } else if (pointInRect(mouseX, mouseY, layout.inventoryRect)) {
-        this->inventoryScroll -= this->mouseWheelDelta * layout.rowHeight;
-      } else {
-        this->shopScroll -= this->mouseWheelDelta * layout.rowHeight;
-        this->inventoryScroll -= this->mouseWheelDelta * layout.rowHeight;
-      }
-    }
-    this->shopScroll = std::clamp(this->shopScroll, 0.0f,
-                                  static_cast<float>(shopMaxScrollRows) * layout.rowHeight);
-    this->inventoryScroll = std::clamp(
-        this->inventoryScroll, 0.0f,
-        static_cast<float>(invMaxScrollRows) * layout.rowHeight);
-    const int shopStartIndex = static_cast<int>(std::floor(this->shopScroll / layout.rowHeight));
-    const int invStartIndex =
-        static_cast<int>(std::floor(this->inventoryScroll / layout.rowHeight));
-
-    if (click && pointInRect(mouseX, mouseY, layout.shopRect)) {
-      const int row =
-          static_cast<int>(std::floor((mouseY - layout.shopRect.y) / layout.rowHeight));
-      const int index = shopStartIndex + row;
-      if (row >= 0 && row < shopVisibleRows && index >= 0 &&
-          index < static_cast<int>(shop.stock.size())) {
-        const int itemId = shop.stock[index];
-        const ItemDef* def = this->itemDatabase->getItem(itemId);
-        const int price = itemPrice(def);
-        if (def && price > 0) {
-          if (stats.gold < price) {
-            this->shopNotice = "Not enough gold.";
-            this->shopNoticeTimer = SHOP_NOTICE_DURATION;
-          } else if (!inventory.addItem(ItemInstance{itemId})) {
-            this->shopNotice = "Inventory full.";
-            this->shopNoticeTimer = SHOP_NOTICE_DURATION;
-          } else {
-            stats.gold -= price;
-            this->shopNotice = "Purchased " + def->name + ".";
-            this->shopNoticeTimer = SHOP_NOTICE_DURATION;
-          }
-        }
-      }
-    }
-
-    if (click && pointInRect(mouseX, mouseY, layout.inventoryRect)) {
-      const int row =
-          static_cast<int>(std::floor((mouseY - layout.inventoryRect.y) / layout.rowHeight));
-      const int index = invStartIndex + row;
-      if (row >= 0 && row < invVisibleRows && index >= 0 &&
-          index < static_cast<int>(inventory.items.size())) {
-        ItemInstance item = inventory.items[index];
-        const ItemDef* def = this->itemDatabase->getItem(item.itemId);
-        const int basePrice = itemPrice(def);
-        const int sellPrice =
-            basePrice > 0 ? std::max(1, basePrice / SHOP_SELL_DIVISOR) : 0;
-        if (inventory.removeItemAt(static_cast<std::size_t>(index))) {
-          stats.gold += sellPrice;
-          if (def) {
-            this->shopNotice = "Sold " + def->name + ".";
-          } else {
-            this->shopNotice = "Sold item.";
-          }
-          this->shopNoticeTimer = SHOP_NOTICE_DURATION;
-        }
-      }
-    }
+    this->shopPanel->handleInput(input.mouseX, input.mouseY, input.mouseWheelDelta, input.click,
+                                 WINDOW_WIDTH, WINDOW_HEIGHT,
+                                 this->shopPanelState, shop, inventory, stats,
+                                 *this->itemDatabase);
   }
-  if (this->questLogVisible && !this->shopOpen && this->mouseWheelDelta != 0.0f) {
+  if (this->questLogVisible && !this->shopOpen && input.mouseWheelDelta != 0.0f) {
     const SDL_FRect panel = this->questLogUi->panelRect(WINDOW_WIDTH, WINDOW_HEIGHT);
-    if (pointInRect(mouseX, mouseY, panel)) {
-      this->questLogScroll -= this->mouseWheelDelta * 18.0f;
-    }
-  }
-  this->mouseWheelDelta = 0.0f;
-
-  {
-    if (this->isPlayerGhost) {
-      this->currentAutoTargetId = -1;
-    } else {
-      const TransformComponent& playerTransform =
-          this->registry->getComponent<TransformComponent>(this->playerEntityId);
-      const CollisionComponent& playerCollision =
-          this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-      const EquipmentComponent& equipment =
-          this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-      const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
-      const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-      const float range = attackProfile.range * AUTO_TARGET_RANGE_MULTIPLIER;
-      const float rangeSquared = range * range;
-      int closestMobId = -1;
-      float closestDist = rangeSquared;
-      Position closestCenter;
-      for (int mobEntityId : this->mobEntityIds) {
-        const HealthComponent& mobHealth =
-            this->registry->getComponent<HealthComponent>(mobEntityId);
-        if (mobHealth.current <= 0) {
-          continue;
-        }
-        if (this->respawnSystem->isSpawning(mobEntityId)) {
-          continue;
-        }
-        const TransformComponent& mobTransform =
-            this->registry->getComponent<TransformComponent>(mobEntityId);
-        const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
-                                 mobTransform.position.y + (TILE_SIZE / 2.0f));
-        const float dist = squaredDistance(playerCenter, mobCenter);
-        if (dist <= closestDist) {
-          closestDist = dist;
-          closestMobId = mobEntityId;
-          closestCenter = mobCenter;
-        }
-      }
-
-      this->currentAutoTargetId = closestMobId;
-      float desiredAngle = this->facingAngle;
-      bool hasFacingTarget = false;
-      if (closestMobId != -1) {
-        desiredAngle = std::atan2(closestCenter.y - playerCenter.y,
-                                  closestCenter.x - playerCenter.x);
-        hasFacingTarget = true;
-      } else if (x != 0 || y != 0) {
-        desiredAngle = std::atan2(static_cast<float>(y), static_cast<float>(x));
-        hasFacingTarget = true;
-      }
-      if (hasFacingTarget) {
-        const float diff = shortestAngleDiff(this->facingAngle, desiredAngle);
-        const float maxStep = FACING_TURN_SPEED * dt;
-        if (std::abs(diff) <= maxStep) {
-          this->facingAngle = desiredAngle;
-        } else {
-          this->facingAngle += (diff > 0.0f ? maxStep : -maxStep);
-        }
-        this->facingX = std::cos(this->facingAngle);
-        this->facingY = std::sin(this->facingAngle);
-      }
+    if (pointInRect(input.mouseX, input.mouseY, panel)) {
+      this->questLogScroll -= input.mouseWheelDelta * 18.0f;
     }
   }
 
-  auto applyPlayerDamageToMob = [&](int mobEntityId, int damage, bool isCrit,
-                                    const Position& hitPosition, const Position& fromPosition) {
-    if (mobEntityId == -1) {
-      return;
-    }
-    HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
-    if (mobHealth.current <= 0 || this->respawnSystem->isSpawning(mobEntityId)) {
-      return;
-    }
-    mobHealth.current = std::max(0, mobHealth.current - damage);
-    applyPushback(*this->registry, mobEntityId, fromPosition, PUSHBACK_DISTANCE, PUSHBACK_DURATION);
-    this->eventBus->emitDamageEvent(
-        DamageEvent{this->playerEntityId, mobEntityId, damage, hitPosition});
-    this->eventBus->emitFloatingTextEvent(
-        FloatingTextEvent{std::to_string(damage), hitPosition,
-                          isCrit ? FloatingTextKind::CritDamage : FloatingTextKind::Damage});
-    if (mobHealth.current == 0) {
-      LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
-      const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
-      this->eventBus->emitMobKilledEvent(MobKilledEvent{mob.type, mobEntityId});
-      level.experience += mob.experience;
-      this->eventBus->emitFloatingTextEvent(
-          FloatingTextEvent{"XP +" + std::to_string(mob.experience), hitPosition,
-                            FloatingTextKind::Info});
-      GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
-      mobGraphic.color = SDL_Color({80, 80, 80, 255});
-    }
-  };
-
-  {
-    for (std::size_t i = 0; i < this->projectileEntityIds.size();) {
-      const int projectileId = this->projectileEntityIds[i];
-      TransformComponent& projectileTransform =
-          this->registry->getComponent<TransformComponent>(projectileId);
-      ProjectileComponent& projectile =
-          this->registry->getComponent<ProjectileComponent>(projectileId);
-      bool shouldRemove = false;
-
-      projectile.lastX = projectileTransform.position.x;
-      projectile.lastY = projectileTransform.position.y;
-      const float dx = projectile.velocityX * dt;
-      const float dy = projectile.velocityY * dt;
-      projectileTransform.position.x += dx;
-      projectileTransform.position.y += dy;
-      projectile.remainingRange =
-          std::max(0.0f, projectile.remainingRange - std::sqrt((dx * dx) + (dy * dy)));
-
-      const int tileX = static_cast<int>(projectileTransform.position.x / TILE_SIZE);
-      const int tileY = static_cast<int>(projectileTransform.position.y / TILE_SIZE);
-      if (!this->map->isWalkable(tileX, tileY) || projectile.remainingRange <= 0.0f) {
-        shouldRemove = true;
-      }
-
-      if (!shouldRemove && projectile.targetEntityId != -1) {
-        const HealthComponent& mobHealth =
-            this->registry->getComponent<HealthComponent>(projectile.targetEntityId);
-        if (mobHealth.current <= 0 || this->respawnSystem->isSpawning(projectile.targetEntityId)) {
-          shouldRemove = true;
-        } else {
-          const TransformComponent& mobTransform =
-              this->registry->getComponent<TransformComponent>(projectile.targetEntityId);
-          const CollisionComponent& mobCollision =
-              this->registry->getComponent<CollisionComponent>(projectile.targetEntityId);
-          const Position mobCenter = centerForEntity(mobTransform, mobCollision);
-          const float radius = (mobCollision.width / 2.0f) + projectile.radius;
-          if (squaredDistance(projectileTransform.position, mobCenter) <= radius * radius) {
-            const TransformComponent& playerTransform =
-                this->registry->getComponent<TransformComponent>(this->playerEntityId);
-            const CollisionComponent& playerCollision =
-                this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-            const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-            applyPlayerDamageToMob(projectile.targetEntityId, projectile.damage,
-                                   projectile.isCrit, mobCenter, playerCenter);
-            shouldRemove = true;
-          }
-        }
-      }
-
-      if (shouldRemove) {
-        projectileTransform.position = Position(-1000.0f, -1000.0f);
-        this->projectileEntityIds.erase(this->projectileEntityIds.begin() + i);
-      } else {
-        ++i;
-      }
-    }
-  }
-
-  if (!this->isPlayerGhost && this->attackCooldownRemaining <= 0.0f) {
-    const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-    const CollisionComponent& playerCollision =
-        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    const StatsComponent& stats =
-        this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    const EquipmentComponent& equipment =
-        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
-    const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
-    std::uniform_real_distribution<float> critRoll(0.0f, 1.0f);
-    const bool isCrit = critRoll(this->rng) <= PLAYER_CRIT_CHANCE;
-    const int attackDamage = isCrit
-                                 ? static_cast<int>(std::round(attackPower * PLAYER_CRIT_MULTIPLIER))
-                                 : attackPower;
-
-    if (this->currentAutoTargetId != -1) {
-      const TransformComponent& mobTransform =
-          this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
-      const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
-                               mobTransform.position.y + (TILE_SIZE / 2.0f));
-      const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-      const float rangeSquared = attackProfile.range * attackProfile.range;
-      if (squaredDistance(playerCenter, mobCenter) <= rangeSquared) {
-        if (attackProfile.isRanged) {
-          float dx = mobCenter.x - playerCenter.x;
-          float dy = mobCenter.y - playerCenter.y;
-          const float length = std::sqrt((dx * dx) + (dy * dy));
-          if (length > 0.001f) {
-            dx /= length;
-            dy /= length;
-            const float spawnOffset =
-                (playerCollision.width / 2.0f) + attackProfile.projectileRadius + 4.0f;
-            const Position spawnPosition(playerCenter.x + (dx * spawnOffset),
-                                         playerCenter.y + (dy * spawnOffset));
-            createProjectileEntity(*this->registry, spawnPosition,
-                                   dx * attackProfile.projectileSpeed,
-                                   dy * attackProfile.projectileSpeed, attackProfile.range,
-                                   this->playerEntityId, this->currentAutoTargetId, attackDamage,
-                                   isCrit, attackProfile.projectileRadius,
-                                   attackProfile.projectileTrailLength,
-                                   attackProfile.projectileColor, this->projectileEntityIds);
-            this->attackCooldownRemaining = attackProfile.cooldown;
-          }
-        } else {
-          applyPlayerDamageToMob(this->currentAutoTargetId, attackDamage, isCrit, mobCenter,
-                                 playerCenter);
-          this->attackCooldownRemaining = attackProfile.cooldown;
-        }
-      }
-    }
-  }
+  updateAutoTargetAndFacing(input, dt);
+  updatePlayerAttack(dt);
 
   // spdlog::get("console")->info("Input direction: ({}, {})", result.first,
   //                               result.second);
@@ -1573,78 +1388,7 @@ void Game::update(float dt) {
     }
   }
 
-  {
-    const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-    const CollisionComponent& playerCollision =
-        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-    const int playerTileX = static_cast<int>(playerCenter.x / TILE_SIZE);
-    const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
-
-    for (int mobEntityId : this->mobEntityIds) {
-      const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
-      if (mobHealth.current <= 0) {
-        continue;
-      }
-      if (this->respawnSystem->isSpawning(mobEntityId)) {
-        continue;
-      }
-      TransformComponent& mobTransform =
-          this->registry->getComponent<TransformComponent>(mobEntityId);
-      const CollisionComponent& mobCollision =
-          this->registry->getComponent<CollisionComponent>(mobEntityId);
-      MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
-      const Position mobCenter = centerForEntity(mobTransform, mobCollision);
-      const HealthComponent& playerHealth =
-          this->registry->getComponent<HealthComponent>(this->playerEntityId);
-      const bool playerAlive = !this->isPlayerGhost && playerHealth.current > 0;
-      const bool playerInRegion =
-          playerTileX >= mob.regionX && playerTileX < mob.regionX + mob.regionWidth &&
-          playerTileY >= mob.regionY && playerTileY < mob.regionY + mob.regionHeight;
-      const float distToPlayer = squaredDistance(mobCenter, playerCenter);
-
-      const Position homePosition(mob.homeX * TILE_SIZE, mob.homeY * TILE_SIZE);
-      const Position homeCenter(homePosition.x + (mobCollision.width / 2.0f),
-                                homePosition.y + (mobCollision.height / 2.0f));
-      const float distToHome = squaredDistance(mobCenter, homeCenter);
-
-      std::optional<Position> target;
-      if (playerAlive && playerInRegion && distToPlayer <= (mob.aggroRange * mob.aggroRange)) {
-        target = playerTransform.position;
-      } else if (distToHome > 4.0f) {
-        target = homePosition;
-      }
-
-      if (target.has_value()) {
-        moveEntityToward(*this->map, mobTransform, mobCollision, mob.speed, *target, dt);
-      }
-
-      mob.attackTimer = std::max(0.0f, mob.attackTimer - dt);
-      if (mob.attackTimer <= 0.0f) {
-        const float attackRangeSquared = mob.attackRange * mob.attackRange;
-        if (playerAlive && squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
-          HealthComponent& playerHealth =
-              this->registry->getComponent<HealthComponent>(this->playerEntityId);
-          if (playerHealth.current > 0) {
-            playerHealth.current = std::max(0, playerHealth.current - mob.attackDamage);
-            this->eventBus->emitDamageEvent(
-                DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
-            this->eventBus->emitFloatingTextEvent(
-                FloatingTextEvent{"-" + std::to_string(mob.attackDamage), playerCenter,
-                                  FloatingTextKind::Damage});
-            if (this->playerKnockbackImmunityRemaining <= 0.0f) {
-              applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
-                            PUSHBACK_DURATION);
-              this->playerKnockbackImmunityRemaining = PLAYER_KNOCKBACK_IMMUNITY_SECONDS;
-            }
-            this->playerHitFlashTimer = 0.2f;
-            mob.attackTimer = mob.attackCooldown;
-          }
-        }
-      }
-    }
-  }
+  updateMobBehavior(dt);
 
   {
     TransformComponent& playerTransform =
@@ -1670,8 +1414,8 @@ void Game::update(float dt) {
       const Position corpseCenter(this->corpsePosition.x + (playerCollision.width / 2.0f),
                                   this->corpsePosition.y + (playerCollision.height / 2.0f));
       const float distToCorpse = squaredDistance(playerCenter, corpseCenter);
-      if (distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE) && resurrectPressed &&
-          !this->wasResurrectPressed) {
+      if (distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE) &&
+          input.resurrectJustPressed) {
         this->isPlayerGhost = false;
         this->hasCorpse = false;
         playerHealth.current = playerHealth.max;
@@ -1681,7 +1425,6 @@ void Game::update(float dt) {
             FloatingTextEvent{"Resurrected", playerCenter, FloatingTextKind::Info});
       }
     }
-    this->wasResurrectPressed = resurrectPressed;
   }
 
   const TransformComponent& playerTransform =
@@ -1774,64 +1517,28 @@ void Game::render() {
   }
 
   { // Projectiles (drawn after entities so they stay visible)
-    SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-    for (int projectileId : this->projectileEntityIds) {
-      const TransformComponent& projectileTransform =
-          this->registry->getComponent<TransformComponent>(projectileId);
-      const ProjectileComponent& projectile =
-          this->registry->getComponent<ProjectileComponent>(projectileId);
-      const float size = projectile.radius * 2.0f;
-      SDL_FRect projectileRect = {projectileTransform.position.x - projectile.radius -
-                                      cameraPosition.x,
-                                  projectileTransform.position.y - projectile.radius -
-                                      cameraPosition.y,
-                                  size, size};
-      SDL_SetRenderDrawColor(this->renderer, projectile.color.r, projectile.color.g,
-                             projectile.color.b, projectile.color.a);
-      SDL_RenderFillRect(this->renderer, &projectileRect);
-      if (projectile.trailLength > 0.0f) {
-        const float speed = std::sqrt((projectile.velocityX * projectile.velocityX) +
-                                      (projectile.velocityY * projectile.velocityY));
-        if (speed > 0.001f) {
-          const float nx = projectile.velocityX / speed;
-          const float ny = projectile.velocityY / speed;
-          const float tailX = projectileTransform.position.x - (nx * projectile.trailLength);
-          const float tailY = projectileTransform.position.y - (ny * projectile.trailLength);
-          SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 200);
-          SDL_RenderLine(this->renderer, tailX - cameraPosition.x, tailY - cameraPosition.y,
-                         projectileTransform.position.x - cameraPosition.x,
-                         projectileTransform.position.y - cameraPosition.y);
-        }
-      }
-      drawCircle(this->renderer, projectileTransform.position, projectile.radius + 2.0f,
-                 cameraPosition, SDL_Color{255, 255, 255, 200});
-      SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 200);
-      SDL_RenderRect(this->renderer, &projectileRect);
-    }
+    renderProjectiles(this->renderer, cameraPosition, *this->registry, this->projectileEntityIds);
   }
 
   { // Quest turn-in markers above NPCs
     const QuestLogComponent& questLog =
         this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-    for (const QuestProgress& progress : questLog.activeQuests) {
-      const QuestDef* def = this->questDatabase->getQuest(progress.questId);
-      if (!def || def->turnInNpcName.empty() || !progress.completed || progress.rewardsClaimed) {
-        continue;
-      }
-      for (int npcId : this->npcEntityIds) {
-        const NpcComponent& npc = this->registry->getComponent<NpcComponent>(npcId);
-        if (npc.name != def->turnInNpcName) {
-          continue;
-        }
-        const TransformComponent& npcTransform =
-            this->registry->getComponent<TransformComponent>(npcId);
-        const CollisionComponent& npcCollision =
-            this->registry->getComponent<CollisionComponent>(npcId);
-        const Position npcCenter = centerForEntity(npcTransform, npcCollision);
-        SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-        drawCircle(this->renderer, Position(npcCenter.x, npcCenter.y - 18.0f), 6.0f,
-                   cameraPosition, SDL_Color{255, 220, 80, 200});
-      }
+    std::vector<NpcMarkerInfo> npcMarkers;
+    for (int npcId : this->npcEntityIds) {
+      const NpcComponent& npc = this->registry->getComponent<NpcComponent>(npcId);
+      const TransformComponent& npcTransform =
+          this->registry->getComponent<TransformComponent>(npcId);
+      const CollisionComponent& npcCollision =
+          this->registry->getComponent<CollisionComponent>(npcId);
+      const Position npcCenter = centerForEntity(npcTransform, npcCollision);
+      npcMarkers.push_back(NpcMarkerInfo{npc.name, npcCenter});
+    }
+    const std::vector<Position> markers =
+        buildQuestTurnInWorldMarkers(questLog, *this->questDatabase, npcMarkers);
+    for (const Position& npcCenter : markers) {
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      drawCircle(this->renderer, Position(npcCenter.x, npcCenter.y - 18.0f), 6.0f,
+                 cameraPosition, SDL_Color{255, 220, 80, 200});
     }
   }
 
@@ -1999,273 +1706,9 @@ void Game::render() {
           this->registry->getComponent<InventoryComponent>(this->playerEntityId);
       const StatsComponent& stats =
           this->registry->getComponent<StatsComponent>(this->playerEntityId);
-      const ShopLayout layout = shopLayout(WINDOW_WIDTH, WINDOW_HEIGHT);
-      const int shopHoveredRow = pointInRect(mouseX, mouseY, layout.shopRect)
-                                     ? static_cast<int>(std::floor((mouseY - layout.shopRect.y) /
-                                                                   layout.rowHeight))
-                                     : -1;
-      const int invHoveredRow = pointInRect(mouseX, mouseY, layout.inventoryRect)
-                                    ? static_cast<int>(std::floor((mouseY - layout.inventoryRect.y) /
-                                                                  layout.rowHeight))
-                                    : -1;
-      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(this->renderer, 12, 12, 12, 220);
-      SDL_RenderFillRect(this->renderer, &layout.panel);
-      SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 140);
-      SDL_RenderRect(this->renderer, &layout.panel);
-
-      SDL_Color titleColor = {255, 240, 210, 255};
-      SDL_Color headerColor = {220, 220, 220, 255};
-      SDL_Color textColor = {235, 235, 235, 255};
-      SDL_Color hintColor = {180, 180, 180, 255};
-
-      const std::string title = npc.name + " - Shop";
-      SDL_Surface* titleSurface =
-          TTF_RenderText_Solid(this->font, title.c_str(), title.length(), titleColor);
-      SDL_Texture* titleTexture = SDL_CreateTextureFromSurface(this->renderer, titleSurface);
-      SDL_FRect titleRect = {layout.panel.x + 12.0f, layout.panel.y + 8.0f,
-                             static_cast<float>(titleSurface->w),
-                             static_cast<float>(titleSurface->h)};
-      SDL_RenderTexture(this->renderer, titleTexture, nullptr, &titleRect);
-      SDL_DestroySurface(titleSurface);
-      SDL_DestroyTexture(titleTexture);
-
-      const std::string goldText = "Gold: " + std::to_string(stats.gold);
-      SDL_Surface* goldSurface =
-          TTF_RenderText_Solid(this->font, goldText.c_str(), goldText.length(), headerColor);
-      SDL_Texture* goldTexture = SDL_CreateTextureFromSurface(this->renderer, goldSurface);
-      SDL_FRect goldRect = {layout.panel.x + layout.panel.w - goldSurface->w - 12.0f,
-                            layout.panel.y + 8.0f, static_cast<float>(goldSurface->w),
-                            static_cast<float>(goldSurface->h)};
-      SDL_RenderTexture(this->renderer, goldTexture, nullptr, &goldRect);
-      SDL_DestroySurface(goldSurface);
-      SDL_DestroyTexture(goldTexture);
-
-      const std::string shopHeader = "Shop";
-      SDL_Surface* shopSurface =
-          TTF_RenderText_Solid(this->font, shopHeader.c_str(), shopHeader.length(), headerColor);
-      SDL_Texture* shopTexture = SDL_CreateTextureFromSurface(this->renderer, shopSurface);
-      SDL_FRect shopHeaderRect = {layout.shopRect.x, layout.shopRect.y - 18.0f,
-                                  static_cast<float>(shopSurface->w),
-                                  static_cast<float>(shopSurface->h)};
-      SDL_RenderTexture(this->renderer, shopTexture, nullptr, &shopHeaderRect);
-      SDL_DestroySurface(shopSurface);
-      SDL_DestroyTexture(shopTexture);
-
-      const std::string invHeader = "Inventory";
-      SDL_Surface* invSurface =
-          TTF_RenderText_Solid(this->font, invHeader.c_str(), invHeader.length(), headerColor);
-      SDL_Texture* invTexture = SDL_CreateTextureFromSurface(this->renderer, invSurface);
-      SDL_FRect invHeaderRect = {layout.inventoryRect.x, layout.inventoryRect.y - 18.0f,
-                                 static_cast<float>(invSurface->w),
-                                 static_cast<float>(invSurface->h)};
-      SDL_RenderTexture(this->renderer, invTexture, nullptr, &invHeaderRect);
-      SDL_DestroySurface(invSurface);
-      SDL_DestroyTexture(invTexture);
-
-      const int shopVisibleRows =
-          std::max(1, static_cast<int>(std::floor(layout.shopRect.h / layout.rowHeight)));
-      const int invVisibleRows =
-          std::max(1, static_cast<int>(std::floor(layout.inventoryRect.h / layout.rowHeight)));
-      const int shopMaxScrollRows =
-          std::max(0, static_cast<int>(shop.stock.size()) - shopVisibleRows);
-      const int invMaxScrollRows =
-          std::max(0, static_cast<int>(inventory.items.size()) - invVisibleRows);
-      this->shopScroll = std::clamp(this->shopScroll, 0.0f,
-                                    static_cast<float>(shopMaxScrollRows) * layout.rowHeight);
-      this->inventoryScroll = std::clamp(
-          this->inventoryScroll, 0.0f,
-          static_cast<float>(invMaxScrollRows) * layout.rowHeight);
-      const int shopStartIndex = static_cast<int>(std::floor(this->shopScroll / layout.rowHeight));
-      const int invStartIndex =
-          static_cast<int>(std::floor(this->inventoryScroll / layout.rowHeight));
-
-      for (int i = 0; i < shopVisibleRows; ++i) {
-        const int index = shopStartIndex + i;
-        if (index < 0 || index >= static_cast<int>(shop.stock.size())) {
-          break;
-        }
-        const int itemId = shop.stock[index];
-        const ItemDef* def = this->itemDatabase->getItem(itemId);
-        if (!def) {
-          continue;
-        }
-        if (i == shopHoveredRow) {
-          SDL_SetRenderDrawColor(this->renderer, 60, 60, 90, 140);
-          SDL_FRect rowRect = {layout.shopRect.x, layout.shopRect.y + (i * layout.rowHeight),
-                               layout.shopRect.w, layout.rowHeight};
-          SDL_RenderFillRect(this->renderer, &rowRect);
-        }
-        const int price = itemPrice(def);
-        const std::string line = def->name + " - " + std::to_string(price);
-        SDL_Surface* lineSurface =
-            TTF_RenderText_Solid(this->font, line.c_str(), line.length(), textColor);
-        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
-        SDL_FRect lineRect = {layout.shopRect.x, layout.shopRect.y + (i * layout.rowHeight),
-                              static_cast<float>(lineSurface->w),
-                              static_cast<float>(lineSurface->h)};
-        SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
-        SDL_DestroySurface(lineSurface);
-        SDL_DestroyTexture(lineTexture);
-      }
-      if (shopMaxScrollRows > 0) {
-        const float trackX = layout.shopRect.x + layout.shopRect.w - 6.0f;
-        const float trackY = layout.shopRect.y;
-        const float trackH = layout.shopRect.h;
-        const float thumbH = std::max(18.0f,
-                                      (static_cast<float>(shopVisibleRows) /
-                                       static_cast<float>(shop.stock.size())) *
-                                          trackH);
-        const float scrollRatio =
-            (shopMaxScrollRows > 0)
-                ? (this->shopScroll /
-                   (static_cast<float>(shopMaxScrollRows) * layout.rowHeight))
-                : 0.0f;
-        const float thumbY = trackY + (trackH - thumbH) * scrollRatio;
-        SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 220);
-        SDL_FRect trackRect = {trackX, trackY, 4.0f, trackH};
-        SDL_RenderFillRect(this->renderer, &trackRect);
-        SDL_SetRenderDrawColor(this->renderer, 200, 200, 200, 220);
-        SDL_FRect thumbRect = {trackX, thumbY, 4.0f, thumbH};
-        SDL_RenderFillRect(this->renderer, &thumbRect);
-      }
-
-      for (int i = 0; i < invVisibleRows; ++i) {
-        const int index = invStartIndex + i;
-        if (index < 0 || index >= static_cast<int>(inventory.items.size())) {
-          break;
-        }
-        const ItemDef* def = this->itemDatabase->getItem(inventory.items[index].itemId);
-        if (!def) {
-          continue;
-        }
-        if (i == invHoveredRow) {
-          SDL_SetRenderDrawColor(this->renderer, 70, 60, 40, 140);
-          SDL_FRect rowRect = {layout.inventoryRect.x,
-                               layout.inventoryRect.y + (i * layout.rowHeight),
-                               layout.inventoryRect.w, layout.rowHeight};
-          SDL_RenderFillRect(this->renderer, &rowRect);
-        }
-        const int basePrice = itemPrice(def);
-        const int sellPrice =
-            basePrice > 0 ? std::max(1, basePrice / SHOP_SELL_DIVISOR) : 0;
-        const std::string line = def->name + " - " + std::to_string(sellPrice);
-        SDL_Surface* lineSurface =
-            TTF_RenderText_Solid(this->font, line.c_str(), line.length(), textColor);
-        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
-        SDL_FRect lineRect = {layout.inventoryRect.x,
-                              layout.inventoryRect.y + (i * layout.rowHeight),
-                              static_cast<float>(lineSurface->w),
-                              static_cast<float>(lineSurface->h)};
-        SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
-        SDL_DestroySurface(lineSurface);
-        SDL_DestroyTexture(lineTexture);
-      }
-      if (invMaxScrollRows > 0) {
-        const float trackX = layout.inventoryRect.x + layout.inventoryRect.w - 6.0f;
-        const float trackY = layout.inventoryRect.y;
-        const float trackH = layout.inventoryRect.h;
-        const float thumbH =
-            std::max(18.0f, (static_cast<float>(invVisibleRows) /
-                             static_cast<float>(inventory.items.size())) *
-                                trackH);
-        const float scrollRatio =
-            (invMaxScrollRows > 0)
-                ? (this->inventoryScroll /
-                   (static_cast<float>(invMaxScrollRows) * layout.rowHeight))
-                : 0.0f;
-        const float thumbY = trackY + (trackH - thumbH) * scrollRatio;
-        SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 220);
-        SDL_FRect trackRect = {trackX, trackY, 4.0f, trackH};
-        SDL_RenderFillRect(this->renderer, &trackRect);
-        SDL_SetRenderDrawColor(this->renderer, 200, 200, 200, 220);
-        SDL_FRect thumbRect = {trackX, thumbY, 4.0f, thumbH};
-        SDL_RenderFillRect(this->renderer, &thumbRect);
-      }
-
-      const std::string hint = "Click item to buy/sell";
-      SDL_Surface* hintSurface =
-          TTF_RenderText_Solid(this->font, hint.c_str(), hint.length(), hintColor);
-      SDL_Texture* hintTexture = SDL_CreateTextureFromSurface(this->renderer, hintSurface);
-      SDL_FRect hintRect = {layout.panel.x + 12.0f,
-                            layout.panel.y + layout.panel.h - 18.0f,
-                            static_cast<float>(hintSurface->w),
-                            static_cast<float>(hintSurface->h)};
-      SDL_RenderTexture(this->renderer, hintTexture, nullptr, &hintRect);
-      SDL_DestroySurface(hintSurface);
-      SDL_DestroyTexture(hintTexture);
-
-      if (shopHoveredRow >= 0) {
-        const int index = shopStartIndex + shopHoveredRow;
-        const ItemDef* def =
-            (index >= 0 && index < static_cast<int>(shop.stock.size()))
-                ? this->itemDatabase->getItem(shop.stock[index])
-                : nullptr;
-        if (def) {
-          const std::string tip = "Buy for " + std::to_string(itemPrice(def)) + " gold";
-          SDL_Surface* tipSurface =
-              TTF_RenderText_Solid(this->font, tip.c_str(), tip.length(), headerColor);
-          SDL_Texture* tipTexture = SDL_CreateTextureFromSurface(this->renderer, tipSurface);
-          SDL_FRect tipRect = {layout.shopRect.x,
-                               layout.shopRect.y + (shopHoveredRow * layout.rowHeight) - 18.0f,
-                               static_cast<float>(tipSurface->w),
-                               static_cast<float>(tipSurface->h)};
-          SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-          SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 180);
-          SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f,
-                             tipRect.h + 4.0f};
-          SDL_RenderFillRect(this->renderer, &tipBg);
-          SDL_RenderTexture(this->renderer, tipTexture, nullptr, &tipRect);
-          SDL_DestroySurface(tipSurface);
-          SDL_DestroyTexture(tipTexture);
-        }
-      }
-
-      if (invHoveredRow >= 0) {
-        const int index = invStartIndex + invHoveredRow;
-        const ItemDef* def = (index >= 0 && index < static_cast<int>(inventory.items.size()))
-                                 ? this->itemDatabase->getItem(inventory.items[index].itemId)
-                                 : nullptr;
-        if (def) {
-          const int basePrice = itemPrice(def);
-          const int sellPrice =
-              basePrice > 0 ? std::max(1, basePrice / SHOP_SELL_DIVISOR) : 0;
-          const std::string tip = "Sell for " + std::to_string(sellPrice) + " gold";
-          SDL_Surface* tipSurface =
-              TTF_RenderText_Solid(this->font, tip.c_str(), tip.length(), headerColor);
-          SDL_Texture* tipTexture = SDL_CreateTextureFromSurface(this->renderer, tipSurface);
-          SDL_FRect tipRect = {layout.inventoryRect.x,
-                               layout.inventoryRect.y + (invHoveredRow * layout.rowHeight) - 18.0f,
-                               static_cast<float>(tipSurface->w),
-                               static_cast<float>(tipSurface->h)};
-          SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-          SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 180);
-          SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f,
-                             tipRect.h + 4.0f};
-          SDL_RenderFillRect(this->renderer, &tipBg);
-          SDL_RenderTexture(this->renderer, tipTexture, nullptr, &tipRect);
-          SDL_DestroySurface(tipSurface);
-          SDL_DestroyTexture(tipTexture);
-        }
-      }
-
-      if (this->shopNoticeTimer > 0.0f && !this->shopNotice.empty()) {
-        SDL_Surface* noticeSurface =
-            TTF_RenderText_Solid(this->font, this->shopNotice.c_str(),
-                                 this->shopNotice.length(), headerColor);
-        SDL_Texture* noticeTexture = SDL_CreateTextureFromSurface(this->renderer, noticeSurface);
-        SDL_FRect noticeRect = {layout.panel.x + 12.0f, layout.panel.y - 20.0f,
-                                static_cast<float>(noticeSurface->w),
-                                static_cast<float>(noticeSurface->h)};
-        SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 180);
-        SDL_FRect noticeBg = {noticeRect.x - 6.0f, noticeRect.y - 4.0f, noticeRect.w + 12.0f,
-                              noticeRect.h + 8.0f};
-        SDL_RenderFillRect(this->renderer, &noticeBg);
-        SDL_RenderTexture(this->renderer, noticeTexture, nullptr, &noticeRect);
-        SDL_DestroySurface(noticeSurface);
-        SDL_DestroyTexture(noticeTexture);
-      }
+      this->shopPanel->render(this->renderer, this->font, WINDOW_WIDTH, WINDOW_HEIGHT,
+                              mouseX, mouseY, npc.name, this->shopPanelState, shop, inventory,
+                              stats, *this->itemDatabase);
     }
   }
 
@@ -2273,101 +1716,16 @@ void Game::render() {
     if (this->activeNpcId != -1 && !this->shopOpen) {
       const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->activeNpcId);
       const std::string title = npc.name;
-      std::string line = npc.dialogLine;
       const QuestLogComponent& questLog =
           this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
       const LevelComponent& level =
           this->registry->getComponent<LevelComponent>(this->playerEntityId);
       const std::vector<QuestEntry> entries = buildNpcQuestEntries(
           npc.name, *this->questSystem, *this->questDatabase, questLog, level);
-      if (!entries.empty()) {
-        line += "\n\nQuests:";
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-          const QuestEntry& entry = entries[i];
-          const QuestDef* def = entry.def;
-          if (!def) {
-            continue;
-          }
-          const std::string prefix =
-              (static_cast<int>(i) == this->activeNpcQuestSelection) ? "> " : "  ";
-          const std::string type =
-              (entry.type == QuestEntryType::Available) ? "[Accept]" : "[Turn In]";
-          line += "\n" + prefix + def->name + " " + type;
-        }
-        line += "\n\nPageUp/PageDown to select";
-        line += "\nPress A to accept, C to turn in";
-      }
-      SDL_Color titleColor = {255, 240, 210, 255};
-      SDL_Color textColor = {235, 235, 235, 255};
-      constexpr float panelWidth = 360.0f;
-      constexpr float panelHeight = 120.0f;
-      constexpr float panelPadding = 10.0f;
-      constexpr float titleOffsetY = 10.0f;
-      constexpr float textOffsetY = 34.0f;
-      constexpr float lineHeight = 16.0f;
-      const float textAreaHeight = panelHeight - textOffsetY - panelPadding;
-      const int maxWidth = static_cast<int>(panelWidth - (panelPadding * 2.0f));
-      const std::vector<std::string> lines = wrapText(this->font, line, maxWidth);
-      const int totalLines = static_cast<int>(lines.size());
-      const int maxVisibleLines =
-          std::max(1, static_cast<int>(std::floor(textAreaHeight / lineHeight)));
-      const float totalHeight = totalLines * lineHeight;
-      const float visibleHeight = maxVisibleLines * lineHeight;
-      const float maxScroll = std::max(0.0f, totalHeight - visibleHeight);
-      this->npcDialogScroll = std::clamp(this->npcDialogScroll, 0.0f, maxScroll);
-      const int startLine = static_cast<int>(std::floor(this->npcDialogScroll / lineHeight));
-      const float lineOffset = std::fmod(this->npcDialogScroll, lineHeight);
-      const int endLine = std::min(totalLines, startLine + maxVisibleLines + 1);
-
-      SDL_Surface* titleSurface =
-          TTF_RenderText_Solid(this->font, title.c_str(), title.length(), titleColor);
-      SDL_FRect panel = {12.0f, WINDOW_HEIGHT - panelHeight - 92.0f, panelWidth, panelHeight};
-      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(this->renderer, 10, 10, 10, 210);
-      SDL_RenderFillRect(this->renderer, &panel);
-      SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 140);
-      SDL_RenderRect(this->renderer, &panel);
-
-      SDL_Texture* titleTexture = SDL_CreateTextureFromSurface(this->renderer, titleSurface);
-      SDL_FRect titleRect = {panel.x + panelPadding, panel.y + titleOffsetY,
-                             static_cast<float>(titleSurface->w),
-                             static_cast<float>(titleSurface->h)};
-      SDL_RenderTexture(this->renderer, titleTexture, nullptr, &titleRect);
-
-      float textY = panel.y + textOffsetY - lineOffset;
-      for (int i = startLine; i < endLine; ++i) {
-        SDL_Surface* lineSurface =
-            TTF_RenderText_Solid(this->font, lines[i].c_str(), lines[i].length(), textColor);
-        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
-        SDL_FRect lineRect = {panel.x + panelPadding, textY,
-                              static_cast<float>(lineSurface->w),
-                              static_cast<float>(lineSurface->h)};
-        if (lineRect.y + lineRect.h >= panel.y + textOffsetY - 2.0f &&
-            lineRect.y <= panel.y + panelHeight - panelPadding) {
-          SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
-        }
-        SDL_DestroyTexture(lineTexture);
-        SDL_DestroySurface(lineSurface);
-        textY += lineHeight;
-      }
-
-      if (maxScroll > 0.0f) {
-        const float trackX = panel.x + panel.w - 8.0f;
-        const float trackY = panel.y + textOffsetY;
-        const float trackH = visibleHeight;
-        const float thumbH = std::max(18.0f, (visibleHeight / totalHeight) * trackH);
-        const float scrollRatio = (maxScroll > 0.0f) ? (this->npcDialogScroll / maxScroll) : 0.0f;
-        const float thumbY = trackY + (trackH - thumbH) * scrollRatio;
-        SDL_SetRenderDrawColor(this->renderer, 30, 30, 30, 220);
-        SDL_FRect trackRect = {trackX, trackY, 4.0f, trackH};
-        SDL_RenderFillRect(this->renderer, &trackRect);
-        SDL_SetRenderDrawColor(this->renderer, 200, 200, 200, 220);
-        SDL_FRect thumbRect = {trackX, thumbY, 4.0f, thumbH};
-        SDL_RenderFillRect(this->renderer, &thumbRect);
-      }
-
-      SDL_DestroyTexture(titleTexture);
-      SDL_DestroySurface(titleSurface);
+      const std::string dialogText =
+          buildNpcDialogText(npc.dialogLine, entries, this->activeNpcQuestSelection);
+      renderNpcDialog(this->renderer, this->font, title, dialogText, WINDOW_WIDTH, WINDOW_HEIGHT,
+                      this->npcDialogScroll);
     }
   }
 
@@ -2561,41 +1919,15 @@ void Game::render() {
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
     const QuestLogComponent& questLog =
         this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-    std::vector<MinimapMarker> markers;
-    for (const QuestProgress& progress : questLog.activeQuests) {
-      const QuestDef* def = this->questDatabase->getQuest(progress.questId);
-      if (!def) {
-        continue;
-      }
-      if (!def->turnInNpcName.empty() && progress.completed && !progress.rewardsClaimed) {
-        for (int npcId : this->npcEntityIds) {
-          const NpcComponent& npc = this->registry->getComponent<NpcComponent>(npcId);
-          if (npc.name != def->turnInNpcName) {
-            continue;
-          }
-          const TransformComponent& npcTransform =
-              this->registry->getComponent<TransformComponent>(npcId);
-          const float tileX = npcTransform.position.x / TILE_SIZE;
-          const float tileY = npcTransform.position.y / TILE_SIZE;
-          markers.push_back(MinimapMarker{tileX, tileY, SDL_Color{255, 220, 80, 255}});
-        }
-      }
-      for (const QuestObjectiveProgress& objective : progress.objectives) {
-        if (objective.def.type != QuestObjectiveType::EnterRegion) {
-          continue;
-        }
-        if (objective.currentCount >= objective.def.requiredCount) {
-          continue;
-        }
-        const std::optional<Position> regionCenter =
-            regionCenterByName(*this->map, objective.def.regionName);
-        if (regionCenter.has_value()) {
-          markers.push_back(MinimapMarker{regionCenter->x / TILE_SIZE,
-                                          regionCenter->y / TILE_SIZE,
-                                          SDL_Color{120, 220, 255, 255}});
-        }
-      }
+    std::vector<NpcMarkerInfo> npcMarkers;
+    for (int npcId : this->npcEntityIds) {
+      const NpcComponent& npc = this->registry->getComponent<NpcComponent>(npcId);
+      const TransformComponent& npcTransform =
+          this->registry->getComponent<TransformComponent>(npcId);
+      npcMarkers.push_back(NpcMarkerInfo{npc.name, npcTransform.position});
     }
+    const std::vector<MinimapMarker> markers =
+        buildQuestMinimapMarkers(questLog, *this->questDatabase, *this->map, npcMarkers);
     this->minimap->render(this->renderer, *this->map, playerTransform.position, WINDOW_WIDTH,
                           WINDOW_HEIGHT, markers);
   }

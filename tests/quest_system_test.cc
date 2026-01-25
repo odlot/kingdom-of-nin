@@ -28,6 +28,8 @@ int main() {
     LevelComponent level(1, 0, 100);
     system.addQuest(log, level, 1);
     expect(log.activeQuests.size() == 1, "quest added at valid level");
+    system.addQuest(log, level, 1);
+    expect(log.activeQuests.size() == 1, "duplicate quest not added");
 
     QuestLogComponent gatedLog;
     LevelComponent gatedLevel(20, 0, 100);
@@ -51,6 +53,10 @@ int main() {
     expect(!log.activeQuests.empty(), "quest exists after update");
     expect(log.activeQuests.front().completed, "quest completes after kills");
     expect(!log.activeQuests.front().rewardsClaimed, "rewards not auto-claimed");
+
+    const std::vector<std::string> wrongTurnIn =
+        system.tryTurnIn("Shopkeeper", log, stats, level, inventory);
+    expect(wrongTurnIn.empty(), "turn-in ignored for wrong NPC");
 
     const std::vector<std::string> turnedIn =
         system.tryTurnIn("Town Guide", log, stats, level, inventory);
