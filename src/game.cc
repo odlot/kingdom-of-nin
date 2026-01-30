@@ -473,11 +473,7 @@ void moveEntityToward(const Map& map, TransformComponent& transform,
                       float dt);
 
 void Game::updateNpcInteraction(const InputState& input) {
-  const TransformComponent& playerTransform =
-      this->registry->getComponent<TransformComponent>(this->playerEntityId);
-  const CollisionComponent& playerCollision =
-      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const Position playerCenter = this->playerCenter();
   const float rangeSquared = NPC_INTERACT_RANGE * NPC_INTERACT_RANGE;
   int closestNpcId = -1;
   float closestDist = rangeSquared;
@@ -527,11 +523,7 @@ void Game::updateNpcInteraction(const InputState& input) {
       const std::vector<std::string> turnedIn =
           this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
       if (!turnedIn.empty()) {
-        const TransformComponent& playerTransform =
-            this->registry->getComponent<TransformComponent>(this->playerEntityId);
-        const CollisionComponent& playerCollision =
-            this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-        const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+        const Position playerCenter = this->playerCenter();
         for (const std::string& questName : turnedIn) {
           this->eventBus->emitFloatingTextEvent(
               FloatingTextEvent{"Completed: " + questName, playerCenter,
@@ -556,11 +548,7 @@ void Game::updateNpcInteraction(const InputState& input) {
       const QuestDef* def = entries[this->activeNpcQuestSelection].def;
       if (def) {
         this->questSystem->addQuest(questLog, level, def->id);
-        const TransformComponent& playerTransform =
-            this->registry->getComponent<TransformComponent>(this->playerEntityId);
-        const CollisionComponent& playerCollision =
-            this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-        const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+        const Position playerCenter = this->playerCenter();
         this->eventBus->emitFloatingTextEvent(
             FloatingTextEvent{"Accepted: " + def->name, playerCenter,
                               FloatingTextKind::Info});
@@ -589,11 +577,7 @@ void Game::updateNpcInteraction(const InputState& input) {
         const std::vector<std::string> turnedIn =
             this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
         if (!turnedIn.empty()) {
-          const TransformComponent& playerTransform =
-              this->registry->getComponent<TransformComponent>(this->playerEntityId);
-          const CollisionComponent& playerCollision =
-              this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-          const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+          const Position playerCenter = this->playerCenter();
           for (const std::string& questName : turnedIn) {
             this->eventBus->emitFloatingTextEvent(
                 FloatingTextEvent{"Completed: " + questName, playerCenter,
@@ -636,14 +620,10 @@ void Game::updateAutoTargetAndFacing(const InputState& input, float dt) {
     return;
   }
 
-  const TransformComponent& playerTransform =
-      this->registry->getComponent<TransformComponent>(this->playerEntityId);
-  const CollisionComponent& playerCollision =
-      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
   const EquipmentComponent& equipment =
       this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
   const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
-  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const Position playerCenter = this->playerCenter();
   const float range = attackProfile.range * AUTO_TARGET_RANGE_MULTIPLIER;
   const float rangeSquared = range * range;
   int closestMobId = -1;
@@ -741,8 +721,6 @@ void Game::updatePlayerAttack(float dt) {
     return;
   }
 
-  const TransformComponent& playerTransform =
-      this->registry->getComponent<TransformComponent>(this->playerEntityId);
   const CollisionComponent& playerCollision =
       this->registry->getComponent<CollisionComponent>(this->playerEntityId);
   const StatsComponent& stats =
@@ -760,7 +738,7 @@ void Game::updatePlayerAttack(float dt) {
       this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
   const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
                            mobTransform.position.y + (TILE_SIZE / 2.0f));
-  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const Position playerCenter = this->playerCenter();
   const float rangeSquared = attackProfile.range * attackProfile.range;
   if (squaredDistance(playerCenter, mobCenter) > rangeSquared) {
     return;
@@ -796,9 +774,7 @@ void Game::updatePlayerAttack(float dt) {
 void Game::updateMobBehavior(float dt) {
   const TransformComponent& playerTransform =
       this->registry->getComponent<TransformComponent>(this->playerEntityId);
-  const CollisionComponent& playerCollision =
-      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  const Position playerCenter = this->playerCenter();
   const int playerTileX = static_cast<int>(playerCenter.x / TILE_SIZE);
   const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
 
@@ -864,6 +840,238 @@ void Game::updateMobBehavior(float dt) {
       }
     }
   }
+}
+
+void Game::updatePlayerDeathState(const InputState& input) {
+  TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  GraphicComponent& playerGraphic =
+      this->registry->getComponent<GraphicComponent>(this->playerEntityId);
+  HealthComponent& playerHealth =
+      this->registry->getComponent<HealthComponent>(this->playerEntityId);
+  const Position playerCenter = this->playerCenter();
+
+  if (!this->isPlayerGhost && playerHealth.current <= 0) {
+    this->isPlayerGhost = true;
+    this->hasCorpse = true;
+    this->corpsePosition = playerTransform.position;
+    playerGraphic.color = SDL_Color({160, 200, 255, 180});
+    this->eventBus->emitFloatingTextEvent(
+        FloatingTextEvent{"You died", playerCenter, FloatingTextKind::Info});
+  }
+
+  if (this->isPlayerGhost && this->hasCorpse) {
+    const Position corpseCenter(this->corpsePosition.x + (playerCollision.width / 2.0f),
+                                this->corpsePosition.y + (playerCollision.height / 2.0f));
+    const float distToCorpse = squaredDistance(playerCenter, corpseCenter);
+    if (distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE) &&
+        input.resurrectJustPressed) {
+      this->isPlayerGhost = false;
+      this->hasCorpse = false;
+      playerHealth.current = playerHealth.max;
+      playerGraphic.color = SDL_Color({240, 240, 240, 255});
+      this->playerKnockbackImmunityRemaining = 0.0f;
+      this->eventBus->emitFloatingTextEvent(
+          FloatingTextEvent{"Resurrected", playerCenter, FloatingTextKind::Info});
+    }
+  }
+}
+
+void Game::updateRegionAndQuestState() {
+  const Position playerCenter = this->playerCenter();
+  const int playerTileX = static_cast<int>(playerCenter.x / TILE_SIZE);
+  const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
+  const int currentRegionIndex = regionIndexAt(*this->map, playerTileX, playerTileY);
+  if (currentRegionIndex != this->lastRegionIndex) {
+    if (this->lastRegionIndex >= 0) {
+      const Region& previousRegion = this->map->getRegions()[this->lastRegionIndex];
+      this->eventBus->emitRegionEvent(
+          RegionEvent{RegionTransition::Leave, regionName(previousRegion.type), playerCenter});
+    }
+    if (currentRegionIndex >= 0) {
+      const Region& currentRegion = this->map->getRegions()[currentRegionIndex];
+      this->eventBus->emitRegionEvent(
+          RegionEvent{RegionTransition::Enter, regionName(currentRegion.type), playerCenter});
+    }
+    this->lastRegionIndex = currentRegionIndex;
+  }
+  QuestLogComponent& questLog =
+      this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
+  StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+  LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+  InventoryComponent& inventory =
+      this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+  this->questSystem->update(*this->eventBus, questLog, stats, level, inventory);
+  SkillTreeComponent& skillTree =
+      this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+  applyLevelUps(level, stats, skillTree);
+}
+
+void Game::updateUiInput(const InputState& input) {
+  {
+    InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    EquipmentComponent& equipment =
+        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    this->inventoryUi->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
+                                   static_cast<int>(input.mouseY), input.mousePressed, inventory,
+                                   equipment, *this->itemDatabase);
+  }
+  {
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    this->characterStats->handleInput(static_cast<int>(input.mouseX),
+                                      static_cast<int>(input.mouseY), input.mousePressed, stats,
+                                      this->inventoryUi->isStatsVisible());
+  }
+  {
+    SkillTreeComponent& skillTree =
+        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+    this->skillTree->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
+                                 static_cast<int>(input.mouseY), input.mousePressed, skillTree,
+                                 *this->skillTreeDefinition, WINDOW_WIDTH);
+  }
+  if (this->shopOpen && this->activeNpcId != -1) {
+    ShopComponent& shop = this->registry->getComponent<ShopComponent>(this->activeNpcId);
+    InventoryComponent& inventory =
+        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    this->shopPanel->handleInput(input.mouseX, input.mouseY, input.mouseWheelDelta, input.click,
+                                 WINDOW_WIDTH, WINDOW_HEIGHT,
+                                 this->shopPanelState, shop, inventory, stats,
+                                 *this->itemDatabase);
+  }
+  if (this->questLogVisible && !this->shopOpen && input.mouseWheelDelta != 0.0f) {
+    const SDL_FRect panel = this->questLogUi->panelRect(WINDOW_WIDTH, WINDOW_HEIGHT);
+    if (pointInRect(input.mouseX, input.mouseY, panel)) {
+      this->questLogScroll -= input.mouseWheelDelta * 18.0f;
+    }
+  }
+}
+
+void Game::updateSystems(const std::pair<int, int>& movementInput, float dt) {
+  // TODO: Refactor system iteration based on whether update or render is needed.
+  for (auto it = this->registry->systemsBegin(); it != this->registry->systemsEnd(); ++it) {
+    MovementSystem* movementSystem = dynamic_cast<MovementSystem*>((*it).get());
+    if (movementSystem) {
+      movementSystem->update(movementInput, dt, *this->map);
+    }
+    PushbackSystem* pushbackSystem = dynamic_cast<PushbackSystem*>((*it).get());
+    if (pushbackSystem) {
+      pushbackSystem->update(dt, *this->map);
+    }
+  }
+}
+
+void Game::updateLootPickup(const InputState& input) {
+  if (this->isPlayerGhost || !input.pickupJustPressed) {
+    return;
+  }
+
+  InventoryComponent& inventory =
+      this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+  const TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  const Position playerCenter = this->playerCenter();
+  const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
+
+  int closestLootId = -1;
+  float closestDist = pickupRangeSquared;
+  for (int lootId : this->lootEntityIds) {
+    const TransformComponent& lootTransform =
+        this->registry->getComponent<TransformComponent>(lootId);
+    const Position lootCenter(lootTransform.position.x + (TILE_SIZE / 2.0f),
+                              lootTransform.position.y + (TILE_SIZE / 2.0f));
+    const float dist = squaredDistance(playerCenter, lootCenter);
+    if (dist <= closestDist) {
+      closestDist = dist;
+      closestLootId = lootId;
+    }
+  }
+
+  if (closestLootId == -1) {
+    return;
+  }
+
+  LootComponent& loot = this->registry->getComponent<LootComponent>(closestLootId);
+  ItemInstance item{loot.itemId};
+  if (!inventory.addItem(item)) {
+    return;
+  }
+  const ItemDef* def = this->itemDatabase->getItem(item.itemId);
+  std::string name = def ? def->name : "Item";
+  this->eventBus->emitItemPickupEvent(ItemPickupEvent{item.itemId, 1});
+  this->eventBus->emitFloatingTextEvent(
+      FloatingTextEvent{"Picked up " + name, playerCenter, FloatingTextKind::Info});
+  GraphicComponent& graphic = this->registry->getComponent<GraphicComponent>(closestLootId);
+  graphic.color = SDL_Color({0, 0, 0, 0});
+  TransformComponent& transform =
+      this->registry->getComponent<TransformComponent>(closestLootId);
+  transform.position = Position(-1000.0f, -1000.0f);
+  this->lootEntityIds.erase(
+      std::remove(this->lootEntityIds.begin(), this->lootEntityIds.end(), closestLootId),
+      this->lootEntityIds.end());
+}
+
+void Game::updateSkillBarAndBuffs(const InputState& input, float dt) {
+  SkillBarComponent& skills =
+      this->registry->getComponent<SkillBarComponent>(this->playerEntityId);
+  BuffComponent& buffs = this->registry->getComponent<BuffComponent>(this->playerEntityId);
+  SkillTreeComponent& skillTree =
+      this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
+  const TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  const Position playerCenter = this->playerCenter();
+  for (auto it = buffs.buffs.begin(); it != buffs.buffs.end();) {
+    it->remaining = std::max(0.0f, it->remaining - dt);
+    if (it->remaining <= 0.0f) {
+      it = buffs.buffs.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (std::size_t i = 0; i < skills.slots.size(); ++i) {
+    SkillSlot& slot = skills.slots[i];
+    if (slot.cooldownRemaining > 0.0f) {
+      slot.cooldownRemaining = std::max(0.0f, slot.cooldownRemaining - dt);
+    }
+    if (input.skillJustPressed[i]) {
+      const SkillDef* def =
+          (slot.skillId > 0) ? this->skillDatabase->getSkill(slot.skillId) : nullptr;
+      const bool unlocked = def && isSkillUnlocked(skillTree, def->id);
+      if (!this->isPlayerGhost && unlocked && slot.cooldownRemaining <= 0.0f) {
+        slot.cooldownRemaining = def->cooldown;
+        this->eventBus->emitFloatingTextEvent(
+            FloatingTextEvent{"Skill: " + def->name, playerCenter, FloatingTextKind::Info});
+        if (def->buffDuration > 0.0f) {
+          applyOrRefreshBuff(buffs, def->id, def->name, def->buffDuration);
+        }
+      }
+    }
+  }
+}
+
+void Game::updateToggles(const InputState& input) {
+  if (input.questLogJustPressed) {
+    this->questLogVisible = !this->questLogVisible;
+  }
+  if (input.debugJustPressed) {
+    this->showDebugMobRanges = !this->showDebugMobRanges;
+  }
+}
+
+Position Game::playerCenter() const {
+  const TransformComponent& playerTransform =
+      this->registry->getComponent<TransformComponent>(this->playerEntityId);
+  const CollisionComponent& playerCollision =
+      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
+  return Position(playerTransform.position.x + (playerCollision.width / 2.0f),
+                  playerTransform.position.y + (playerCollision.height / 2.0f));
 }
 
 void applyPushback(Registry& registry, int targetEntityId, const Position& fromPosition,
@@ -1262,89 +1470,8 @@ void Game::update(float dt) {
                                  *this->skillTreeDefinition, WINDOW_WIDTH);
   }
 
-  {
-    SkillBarComponent& skills =
-        this->registry->getComponent<SkillBarComponent>(this->playerEntityId);
-    BuffComponent& buffs = this->registry->getComponent<BuffComponent>(this->playerEntityId);
-    SkillTreeComponent& skillTree =
-        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
-    const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-    const CollisionComponent& playerCollision =
-        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-    for (auto it = buffs.buffs.begin(); it != buffs.buffs.end();) {
-      it->remaining = std::max(0.0f, it->remaining - dt);
-      if (it->remaining <= 0.0f) {
-        it = buffs.buffs.erase(it);
-      } else {
-        ++it;
-      }
-    }
-    for (std::size_t i = 0; i < skills.slots.size(); ++i) {
-      SkillSlot& slot = skills.slots[i];
-      if (slot.cooldownRemaining > 0.0f) {
-        slot.cooldownRemaining = std::max(0.0f, slot.cooldownRemaining - dt);
-      }
-      if (input.skillJustPressed[i]) {
-        const SkillDef* def =
-            (slot.skillId > 0) ? this->skillDatabase->getSkill(slot.skillId) : nullptr;
-        const bool unlocked = def && isSkillUnlocked(skillTree, def->id);
-        if (!this->isPlayerGhost && unlocked && slot.cooldownRemaining <= 0.0f) {
-          slot.cooldownRemaining = def->cooldown;
-        this->eventBus->emitFloatingTextEvent(
-            FloatingTextEvent{"Skill: " + def->name, playerCenter, FloatingTextKind::Info});
-          if (def->buffDuration > 0.0f) {
-            applyOrRefreshBuff(buffs, def->id, def->name, def->buffDuration);
-          }
-        }
-      }
-    }
-  }
-  if (!this->isPlayerGhost && input.pickupJustPressed) {
-    InventoryComponent& inventory =
-        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
-    const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-    const CollisionComponent& playerCollision =
-        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-    const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
-
-    int closestLootId = -1;
-    float closestDist = pickupRangeSquared;
-    for (int lootId : this->lootEntityIds) {
-      const TransformComponent& lootTransform =
-          this->registry->getComponent<TransformComponent>(lootId);
-      const Position lootCenter(lootTransform.position.x + (TILE_SIZE / 2.0f),
-                                lootTransform.position.y + (TILE_SIZE / 2.0f));
-      const float dist = squaredDistance(playerCenter, lootCenter);
-      if (dist <= closestDist) {
-        closestDist = dist;
-        closestLootId = lootId;
-      }
-    }
-
-    if (closestLootId != -1) {
-      LootComponent& loot = this->registry->getComponent<LootComponent>(closestLootId);
-      ItemInstance item{loot.itemId};
-      if (inventory.addItem(item)) {
-        const ItemDef* def = this->itemDatabase->getItem(item.itemId);
-        std::string name = def ? def->name : "Item";
-        this->eventBus->emitItemPickupEvent(ItemPickupEvent{item.itemId, 1});
-        this->eventBus->emitFloatingTextEvent(
-            FloatingTextEvent{"Picked up " + name, playerCenter, FloatingTextKind::Info});
-        GraphicComponent& graphic = this->registry->getComponent<GraphicComponent>(closestLootId);
-        graphic.color = SDL_Color({0, 0, 0, 0});
-        TransformComponent& transform =
-            this->registry->getComponent<TransformComponent>(closestLootId);
-        transform.position = Position(-1000.0f, -1000.0f);
-        this->lootEntityIds.erase(
-            std::remove(this->lootEntityIds.begin(), this->lootEntityIds.end(), closestLootId),
-            this->lootEntityIds.end());
-      }
-    }
-  }
+  updateSkillBarAndBuffs(input, dt);
+  updateLootPickup(input);
   if (input.questLogJustPressed) {
     this->questLogVisible = !this->questLogVisible;
   }
@@ -1375,93 +1502,15 @@ void Game::update(float dt) {
 
   // spdlog::get("console")->info("Input direction: ({}, {})", result.first,
   //                               result.second);
-  //  TODO: Refactor system iteration based on whether update or render is
-  //  needed, implement to an interface?
-  for (auto it = this->registry->systemsBegin(); it != this->registry->systemsEnd(); ++it) {
-    MovementSystem* movementSystem = dynamic_cast<MovementSystem*>((*it).get());
-    if (movementSystem) {
-      movementSystem->update(result, dt, *this->map);
-    }
-    PushbackSystem* pushbackSystem = dynamic_cast<PushbackSystem*>((*it).get());
-    if (pushbackSystem) {
-      pushbackSystem->update(dt, *this->map);
-    }
-  }
+  updateSystems(result, dt);
 
   updateMobBehavior(dt);
 
-  {
-    TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-    const CollisionComponent& playerCollision =
-        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    GraphicComponent& playerGraphic =
-        this->registry->getComponent<GraphicComponent>(this->playerEntityId);
-    HealthComponent& playerHealth =
-        this->registry->getComponent<HealthComponent>(this->playerEntityId);
-    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+  updatePlayerDeathState(input);
 
-    if (!this->isPlayerGhost && playerHealth.current <= 0) {
-      this->isPlayerGhost = true;
-      this->hasCorpse = true;
-      this->corpsePosition = playerTransform.position;
-      playerGraphic.color = SDL_Color({160, 200, 255, 180});
-      this->eventBus->emitFloatingTextEvent(
-          FloatingTextEvent{"You died", playerCenter, FloatingTextKind::Info});
-    }
-
-    if (this->isPlayerGhost && this->hasCorpse) {
-      const Position corpseCenter(this->corpsePosition.x + (playerCollision.width / 2.0f),
-                                  this->corpsePosition.y + (playerCollision.height / 2.0f));
-      const float distToCorpse = squaredDistance(playerCenter, corpseCenter);
-      if (distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE) &&
-          input.resurrectJustPressed) {
-        this->isPlayerGhost = false;
-        this->hasCorpse = false;
-        playerHealth.current = playerHealth.max;
-        playerGraphic.color = SDL_Color({240, 240, 240, 255});
-        this->playerKnockbackImmunityRemaining = 0.0f;
-        this->eventBus->emitFloatingTextEvent(
-            FloatingTextEvent{"Resurrected", playerCenter, FloatingTextKind::Info});
-      }
-    }
-  }
-
-  const TransformComponent& playerTransform =
-      this->registry->getComponent<TransformComponent>(this->playerEntityId);
-  const CollisionComponent& playerCollision =
-      this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-  Position playerCenter(playerTransform.position.x + (playerCollision.width / 2.0f),
-                        playerTransform.position.y + (playerCollision.height / 2.0f));
-  const int playerTileX = static_cast<int>(playerCenter.x / TILE_SIZE);
-  const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
-  const int currentRegionIndex = regionIndexAt(*this->map, playerTileX, playerTileY);
-  if (currentRegionIndex != this->lastRegionIndex) {
-    if (this->lastRegionIndex >= 0) {
-      const Region& previousRegion = this->map->getRegions()[this->lastRegionIndex];
-      this->eventBus->emitRegionEvent(
-          RegionEvent{RegionTransition::Leave, regionName(previousRegion.type), playerCenter});
-    }
-    if (currentRegionIndex >= 0) {
-      const Region& currentRegion = this->map->getRegions()[currentRegionIndex];
-      this->eventBus->emitRegionEvent(
-          RegionEvent{RegionTransition::Enter, regionName(currentRegion.type), playerCenter});
-    }
-    this->lastRegionIndex = currentRegionIndex;
-  }
-  {
-    QuestLogComponent& questLog =
-        this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
-    InventoryComponent& inventory =
-        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
-    this->questSystem->update(*this->eventBus, questLog, stats, level, inventory);
-    SkillTreeComponent& skillTree =
-        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
-    applyLevelUps(level, stats, skillTree);
-  }
-  this->camera->update(playerCenter);
+  updateRegionAndQuestState();
+  const Position currentPlayerCenter = playerCenter();
+  this->camera->update(currentPlayerCenter);
 }
 
 void Game::render() {
@@ -1573,13 +1622,9 @@ void Game::render() {
   }
 
   { // Facing arc (melee)
-    const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-    const CollisionComponent& playerCollision =
-        this->registry->getComponent<CollisionComponent>(this->playerEntityId);
     const EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    const Position playerCenter = this->playerCenter();
     const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
     SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
     drawFacingArc(this->renderer, playerCenter, attackProfile.range, this->facingX, this->facingY,
@@ -1608,11 +1653,7 @@ void Game::render() {
 
   { // Loot labels and pickup prompt
     if (!this->isPlayerGhost) {
-      const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
-      const CollisionComponent& playerCollision =
-          this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-      const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+      const Position playerCenter = this->playerCenter();
       const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
       int closestLootId = -1;
       float closestDist = pickupRangeSquared;
@@ -1878,11 +1919,9 @@ void Game::render() {
   }
 
   if (this->isPlayerGhost && this->hasCorpse) {
-    const TransformComponent& playerTransform =
-        this->registry->getComponent<TransformComponent>(this->playerEntityId);
     const CollisionComponent& playerCollision =
         this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    const Position playerCenter = centerForEntity(playerTransform, playerCollision);
+    const Position playerCenter = this->playerCenter();
     const Position corpseCenter(this->corpsePosition.x + (playerCollision.width / 2.0f),
                                 this->corpsePosition.y + (playerCollision.height / 2.0f));
     const float distToCorpse = squaredDistance(playerCenter, corpseCenter);

@@ -80,6 +80,14 @@ private:
   void updateAutoTargetAndFacing(const InputState& input, float dt);
   void updatePlayerAttack(float dt);
   void updateMobBehavior(float dt);
+  void updatePlayerDeathState(const InputState& input);
+  void updateRegionAndQuestState();
+  void updateUiInput(const InputState& input);
+  void updateSystems(const std::pair<int, int>& movementInput, float dt);
+  void updateLootPickup(const InputState& input);
+  void updateSkillBarAndBuffs(const InputState& input, float dt);
+  void updateToggles(const InputState& input);
+  Position playerCenter() const;
 
   SDL_Window* window = nullptr;
   SDL_Renderer* renderer = nullptr;
