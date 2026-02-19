@@ -13,9 +13,9 @@
 #include "ecs/component/movement_component.h"
 #include "ecs/component/npc_component.h"
 #include "ecs/component/projectile_component.h"
+#include "ecs/component/pushback_component.h"
 #include "ecs/component/quest_log_component.h"
 #include "ecs/component/shop_component.h"
-#include "ecs/component/pushback_component.h"
 #include "ecs/component/skill_bar_component.h"
 #include "ecs/component/skill_tree_component.h"
 #include "ecs/component/stats_component.h"
@@ -26,16 +26,16 @@
 #include "events/events.h"
 #include "gameplay/projectile_system.h"
 #include "quests/quest_helpers.h"
-#include "ui/quest_marker_helpers.h"
 #include "ui/buff_bar.h"
 #include "ui/floating_text_system.h"
 #include "ui/inventory.h"
 #include "ui/minimap.h"
+#include "ui/npc_dialog.h"
 #include "ui/quest_log.h"
+#include "ui/quest_marker_helpers.h"
 #include "ui/render_utils.h"
 #include "ui/skill_bar.h"
 #include "ui/skill_tree.h"
-#include "ui/npc_dialog.h"
 #include "world/generator.h"
 #include "world/region.h"
 #include "world/tile.h"
@@ -203,9 +203,8 @@ Game::InputState Game::captureInput() {
   input.questPrevPressed = input.keyboardState[SDL_SCANCODE_PAGEUP];
   input.questNextPressed = input.keyboardState[SDL_SCANCODE_PAGEDOWN];
 
-  const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2,
-                                                 SDL_SCANCODE_3, SDL_SCANCODE_4,
-                                                 SDL_SCANCODE_5};
+  const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3,
+                                                 SDL_SCANCODE_4, SDL_SCANCODE_5};
   for (std::size_t i = 0; i < skillKeys.size(); ++i) {
     input.skillPressed[i] = input.keyboardState[skillKeys[i]];
     input.skillJustPressed[i] = input.skillPressed[i] && !this->wasSkillPressed[i];
@@ -466,8 +465,7 @@ void applyPushback(Registry& registry, int targetEntityId, const Position& fromP
 int createProjectileEntity(Registry& registry, const Position& position, float velocityX,
                            float velocityY, float range, int sourceEntityId, int targetEntityId,
                            int damage, bool isCrit, float radius, float trailLength,
-                           SDL_Color color,
-                           std::vector<int>& projectileEntityIds);
+                           SDL_Color color, std::vector<int>& projectileEntityIds);
 void moveEntityToward(const Map& map, TransformComponent& transform,
                       const CollisionComponent& collision, float speed, const Position& target,
                       float dt);
@@ -512,22 +510,18 @@ void Game::updateNpcInteraction(const InputState& input) {
       this->activeNpcQuestSelection = 0;
       QuestLogComponent& questLog =
           this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-      StatsComponent& stats =
-          this->registry->getComponent<StatsComponent>(this->playerEntityId);
-      LevelComponent& level =
-          this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+      LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
       InventoryComponent& inventory =
           this->registry->getComponent<InventoryComponent>(this->playerEntityId);
-      const NpcComponent& npc =
-          this->registry->getComponent<NpcComponent>(this->activeNpcId);
+      const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->activeNpcId);
       const std::vector<std::string> turnedIn =
           this->questSystem->tryTurnIn(npc.name, questLog, stats, level, inventory);
       if (!turnedIn.empty()) {
         const Position playerCenter = this->playerCenter();
         for (const std::string& questName : turnedIn) {
           this->eventBus->emitFloatingTextEvent(
-              FloatingTextEvent{"Completed: " + questName, playerCenter,
-                                FloatingTextKind::Info});
+              FloatingTextEvent{"Completed: " + questName, playerCenter, FloatingTextKind::Info});
         }
       }
     }
@@ -535,14 +529,11 @@ void Game::updateNpcInteraction(const InputState& input) {
   if (this->activeNpcId != -1 && !this->shopOpen && input.acceptQuestJustPressed) {
     QuestLogComponent& questLog =
         this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-    LevelComponent& level =
-        this->registry->getComponent<LevelComponent>(this->playerEntityId);
-    const NpcComponent& npc =
-        this->registry->getComponent<NpcComponent>(this->activeNpcId);
-    const std::vector<QuestEntry> entries = buildNpcQuestEntries(
-        npc.name, *this->questSystem, *this->questDatabase, questLog, level);
-    if (!entries.empty() &&
-        this->activeNpcQuestSelection >= 0 &&
+    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->activeNpcId);
+    const std::vector<QuestEntry> entries =
+        buildNpcQuestEntries(npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+    if (!entries.empty() && this->activeNpcQuestSelection >= 0 &&
         this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
         entries[this->activeNpcQuestSelection].type == QuestEntryType::Available) {
       const QuestDef* def = entries[this->activeNpcQuestSelection].def;
@@ -550,26 +541,21 @@ void Game::updateNpcInteraction(const InputState& input) {
         this->questSystem->addQuest(questLog, level, def->id);
         const Position playerCenter = this->playerCenter();
         this->eventBus->emitFloatingTextEvent(
-            FloatingTextEvent{"Accepted: " + def->name, playerCenter,
-                              FloatingTextKind::Info});
+            FloatingTextEvent{"Accepted: " + def->name, playerCenter, FloatingTextKind::Info});
       }
     }
   }
   if (this->activeNpcId != -1 && !this->shopOpen && input.turnInQuestJustPressed) {
     QuestLogComponent& questLog =
         this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-    StatsComponent& stats =
-        this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    LevelComponent& level =
-        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
     InventoryComponent& inventory =
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
-    const NpcComponent& npc =
-        this->registry->getComponent<NpcComponent>(this->activeNpcId);
-    const std::vector<QuestEntry> entries = buildNpcQuestEntries(
-        npc.name, *this->questSystem, *this->questDatabase, questLog, level);
-    if (!entries.empty() &&
-        this->activeNpcQuestSelection >= 0 &&
+    const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->activeNpcId);
+    const std::vector<QuestEntry> entries =
+        buildNpcQuestEntries(npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+    if (!entries.empty() && this->activeNpcQuestSelection >= 0 &&
         this->activeNpcQuestSelection < static_cast<int>(entries.size()) &&
         entries[this->activeNpcQuestSelection].type == QuestEntryType::TurnIn) {
       const QuestDef* def = entries[this->activeNpcQuestSelection].def;
@@ -580,8 +566,7 @@ void Game::updateNpcInteraction(const InputState& input) {
           const Position playerCenter = this->playerCenter();
           for (const std::string& questName : turnedIn) {
             this->eventBus->emitFloatingTextEvent(
-                FloatingTextEvent{"Completed: " + questName, playerCenter,
-                                  FloatingTextKind::Info});
+                FloatingTextEvent{"Completed: " + questName, playerCenter, FloatingTextKind::Info});
           }
         }
       }
@@ -591,19 +576,16 @@ void Game::updateNpcInteraction(const InputState& input) {
       (input.questPrevJustPressed || input.questNextJustPressed)) {
     QuestLogComponent& questLog =
         this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
-    LevelComponent& level =
-        this->registry->getComponent<LevelComponent>(this->playerEntityId);
-    const NpcComponent& npc =
-        this->registry->getComponent<NpcComponent>(this->activeNpcId);
-    const std::vector<QuestEntry> entries = buildNpcQuestEntries(
-        npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+    LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const NpcComponent& npc = this->registry->getComponent<NpcComponent>(this->activeNpcId);
+    const std::vector<QuestEntry> entries =
+        buildNpcQuestEntries(npc.name, *this->questSystem, *this->questDatabase, questLog, level);
     if (!entries.empty()) {
       const int count = static_cast<int>(entries.size());
       if (input.questNextJustPressed) {
         this->activeNpcQuestSelection = (this->activeNpcQuestSelection + 1) % count;
       } else if (input.questPrevJustPressed) {
-        this->activeNpcQuestSelection =
-            (this->activeNpcQuestSelection - 1 + count) % count;
+        this->activeNpcQuestSelection = (this->activeNpcQuestSelection - 1 + count) % count;
       }
     } else {
       this->activeNpcQuestSelection = 0;
@@ -630,8 +612,7 @@ void Game::updateAutoTargetAndFacing(const InputState& input, float dt) {
   float closestDist = rangeSquared;
   Position closestCenter;
   for (int mobEntityId : this->mobEntityIds) {
-    const HealthComponent& mobHealth =
-        this->registry->getComponent<HealthComponent>(mobEntityId);
+    const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
     if (mobHealth.current <= 0) {
       continue;
     }
@@ -654,12 +635,10 @@ void Game::updateAutoTargetAndFacing(const InputState& input, float dt) {
   float desiredAngle = this->facingAngle;
   bool hasFacingTarget = false;
   if (closestMobId != -1) {
-    desiredAngle =
-        std::atan2(closestCenter.y - playerCenter.y, closestCenter.x - playerCenter.x);
+    desiredAngle = std::atan2(closestCenter.y - playerCenter.y, closestCenter.x - playerCenter.x);
     hasFacingTarget = true;
   } else if (input.moveX != 0 || input.moveY != 0) {
-    desiredAngle = std::atan2(static_cast<float>(input.moveY),
-                              static_cast<float>(input.moveX));
+    desiredAngle = std::atan2(static_cast<float>(input.moveY), static_cast<float>(input.moveX));
     hasFacingTarget = true;
   }
   if (hasFacingTarget) {
@@ -686,8 +665,7 @@ void Game::updatePlayerAttack(float dt) {
       return;
     }
     mobHealth.current = std::max(0, mobHealth.current - damage);
-    applyPushback(*this->registry, mobEntityId, fromPosition, PUSHBACK_DISTANCE,
-                  PUSHBACK_DURATION);
+    applyPushback(*this->registry, mobEntityId, fromPosition, PUSHBACK_DISTANCE, PUSHBACK_DURATION);
     this->eventBus->emitDamageEvent(
         DamageEvent{this->playerEntityId, mobEntityId, damage, hitPosition});
     this->eventBus->emitFloatingTextEvent(
@@ -698,21 +676,19 @@ void Game::updatePlayerAttack(float dt) {
       const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
       this->eventBus->emitMobKilledEvent(MobKilledEvent{mob.type, mobEntityId});
       level.experience += mob.experience;
-      this->eventBus->emitFloatingTextEvent(
-          FloatingTextEvent{"XP +" + std::to_string(mob.experience), hitPosition,
-                            FloatingTextKind::Info});
+      this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
+          "XP +" + std::to_string(mob.experience), hitPosition, FloatingTextKind::Info});
       GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
       mobGraphic.color = SDL_Color({80, 80, 80, 255});
     }
   };
 
-  updateProjectiles(
-      dt, *this->registry, *this->map, *this->respawnSystem, this->projectileEntityIds,
-      this->playerEntityId,
-      [&](int mobId, int damage, bool isCrit, const Position& hitPosition,
-          const Position& fromPosition) {
-        applyPlayerDamageToMob(mobId, damage, isCrit, hitPosition, fromPosition);
-      });
+  updateProjectiles(dt, *this->registry, *this->map, *this->respawnSystem,
+                    this->projectileEntityIds, this->playerEntityId,
+                    [&](int mobId, int damage, bool isCrit, const Position& hitPosition,
+                        const Position& fromPosition) {
+                      applyPlayerDamageToMob(mobId, damage, isCrit, hitPosition, fromPosition);
+                    });
 
   if (this->isPlayerGhost || this->attackCooldownRemaining > 0.0f) {
     return;
@@ -723,8 +699,7 @@ void Game::updatePlayerAttack(float dt) {
 
   const CollisionComponent& playerCollision =
       this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-  const StatsComponent& stats =
-      this->registry->getComponent<StatsComponent>(this->playerEntityId);
+  const StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
   const EquipmentComponent& equipment =
       this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
   const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
@@ -755,12 +730,10 @@ void Game::updatePlayerAttack(float dt) {
           (playerCollision.width / 2.0f) + attackProfile.projectileRadius + 4.0f;
       const Position spawnPosition(playerCenter.x + (dx * spawnOffset),
                                    playerCenter.y + (dy * spawnOffset));
-      createProjectileEntity(*this->registry, spawnPosition,
-                             dx * attackProfile.projectileSpeed,
+      createProjectileEntity(*this->registry, spawnPosition, dx * attackProfile.projectileSpeed,
                              dy * attackProfile.projectileSpeed, attackProfile.range,
-                             this->playerEntityId, this->currentAutoTargetId, attackDamage,
-                             isCrit, attackProfile.projectileRadius,
-                             attackProfile.projectileTrailLength,
+                             this->playerEntityId, this->currentAutoTargetId, attackDamage, isCrit,
+                             attackProfile.projectileRadius, attackProfile.projectileTrailLength,
                              attackProfile.projectileColor, this->projectileEntityIds);
       this->attackCooldownRemaining = attackProfile.cooldown;
     }
@@ -826,9 +799,8 @@ void Game::updateMobBehavior(float dt) {
           playerHealth.current = std::max(0, playerHealth.current - mob.attackDamage);
           this->eventBus->emitDamageEvent(
               DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
-          this->eventBus->emitFloatingTextEvent(
-              FloatingTextEvent{"-" + std::to_string(mob.attackDamage), playerCenter,
-                                FloatingTextKind::Damage});
+          this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
+              "-" + std::to_string(mob.attackDamage), playerCenter, FloatingTextKind::Damage});
           if (this->playerKnockbackImmunityRemaining <= 0.0f) {
             applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
                           PUSHBACK_DURATION);
@@ -866,8 +838,7 @@ void Game::updatePlayerDeathState(const InputState& input) {
     const Position corpseCenter(this->corpsePosition.x + (playerCollision.width / 2.0f),
                                 this->corpsePosition.y + (playerCollision.height / 2.0f));
     const float distToCorpse = squaredDistance(playerCenter, corpseCenter);
-    if (distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE) &&
-        input.resurrectJustPressed) {
+    if (distToCorpse <= (RESURRECT_RANGE * RESURRECT_RANGE) && input.resurrectJustPressed) {
       this->isPlayerGhost = false;
       this->hasCorpse = false;
       playerHealth.current = playerHealth.max;
@@ -922,8 +893,8 @@ void Game::updateUiInput(const InputState& input) {
   {
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
     this->characterStats->handleInput(static_cast<int>(input.mouseX),
-                                      static_cast<int>(input.mouseY), input.mousePressed, stats,
-                                      this->inventoryUi->isStatsVisible());
+                                      static_cast<int>(input.mouseY), input.mousePressed,
+                                      WINDOW_WIDTH, stats, this->inventoryUi->isStatsVisible());
   }
   {
     SkillTreeComponent& skillTree =
@@ -938,9 +909,8 @@ void Game::updateUiInput(const InputState& input) {
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
     this->shopPanel->handleInput(input.mouseX, input.mouseY, input.mouseWheelDelta, input.click,
-                                 WINDOW_WIDTH, WINDOW_HEIGHT,
-                                 this->shopPanelState, shop, inventory, stats,
-                                 *this->itemDatabase);
+                                 WINDOW_WIDTH, WINDOW_HEIGHT, this->shopPanelState, shop, inventory,
+                                 stats, *this->itemDatabase);
   }
   if (this->questLogVisible && !this->shopOpen && input.mouseWheelDelta != 0.0f) {
     const SDL_FRect panel = this->questLogUi->panelRect(WINDOW_WIDTH, WINDOW_HEIGHT);
@@ -1008,8 +978,7 @@ void Game::updateLootPickup(const InputState& input) {
       FloatingTextEvent{"Picked up " + name, playerCenter, FloatingTextKind::Info});
   GraphicComponent& graphic = this->registry->getComponent<GraphicComponent>(closestLootId);
   graphic.color = SDL_Color({0, 0, 0, 0});
-  TransformComponent& transform =
-      this->registry->getComponent<TransformComponent>(closestLootId);
+  TransformComponent& transform = this->registry->getComponent<TransformComponent>(closestLootId);
   transform.position = Position(-1000.0f, -1000.0f);
   this->lootEntityIds.erase(
       std::remove(this->lootEntityIds.begin(), this->lootEntityIds.end(), closestLootId),
@@ -1017,8 +986,7 @@ void Game::updateLootPickup(const InputState& input) {
 }
 
 void Game::updateSkillBarAndBuffs(const InputState& input, float dt) {
-  SkillBarComponent& skills =
-      this->registry->getComponent<SkillBarComponent>(this->playerEntityId);
+  SkillBarComponent& skills = this->registry->getComponent<SkillBarComponent>(this->playerEntityId);
   BuffComponent& buffs = this->registry->getComponent<BuffComponent>(this->playerEntityId);
   SkillTreeComponent& skillTree =
       this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
@@ -1131,8 +1099,8 @@ int createNpcEntity(Registry& registry, const Position& position, std::string na
 int createShopNpcEntity(Registry& registry, const Position& position, std::string name,
                         std::string dialogLine, std::vector<int> stock,
                         std::vector<int>& npcEntityIds, std::vector<int>& shopNpcIds) {
-  int entityId = createNpcEntity(registry, position, std::move(name), std::move(dialogLine),
-                                 npcEntityIds);
+  int entityId =
+      createNpcEntity(registry, position, std::move(name), std::move(dialogLine), npcEntityIds);
   registry.registerComponentForEntity<ShopComponent>(
       std::make_unique<ShopComponent>(std::move(stock)), entityId);
   shopNpcIds.push_back(entityId);
@@ -1142,14 +1110,13 @@ int createShopNpcEntity(Registry& registry, const Position& position, std::strin
 int createProjectileEntity(Registry& registry, const Position& position, float velocityX,
                            float velocityY, float range, int sourceEntityId, int targetEntityId,
                            int damage, bool isCrit, float radius, float trailLength,
-                           SDL_Color color,
-                           std::vector<int>& projectileEntityIds) {
+                           SDL_Color color, std::vector<int>& projectileEntityIds) {
   int entityId = registry.createEntity();
   registry.registerComponentForEntity<TransformComponent>(
       std::make_unique<TransformComponent>(position), entityId);
-  auto projectile = std::make_unique<ProjectileComponent>(
-      sourceEntityId, targetEntityId, velocityX, velocityY, range, damage, isCrit, radius,
-      trailLength, color);
+  auto projectile =
+      std::make_unique<ProjectileComponent>(sourceEntityId, targetEntityId, velocityX, velocityY,
+                                            range, damage, isCrit, radius, trailLength, color);
   projectile->lastX = position.x;
   projectile->lastY = position.y;
   registry.registerComponentForEntity<ProjectileComponent>(std::move(projectile), entityId);
@@ -1366,9 +1333,8 @@ Game::Game() {
     }
     if (this->map->isWalkable(npcTileX, npcTileY)) {
       Position npcPosition(npcTileX * TILE_SIZE, npcTileY * TILE_SIZE);
-      createShopNpcEntity(*this->registry, npcPosition, "Shopkeeper",
-                          "Need supplies? Take a look.", {1, 5, 6, 7, 8, 2, 3, 4},
-                          this->npcEntityIds, this->shopNpcIds);
+      createShopNpcEntity(*this->registry, npcPosition, "Shopkeeper", "Need supplies? Take a look.",
+                          {1, 5, 6, 7, 8, 2, 3, 4}, this->npcEntityIds, this->shopNpcIds);
     }
   }
 
@@ -1447,28 +1413,7 @@ void Game::update(float dt) {
 
   const InputState input = captureInput();
   auto result = std::make_pair(input.moveX, input.moveY);
-  {
-    InventoryComponent& inventory =
-        this->registry->getComponent<InventoryComponent>(this->playerEntityId);
-    EquipmentComponent& equipment =
-        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    this->inventoryUi->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
-                                   static_cast<int>(input.mouseY), input.mousePressed, inventory,
-                                   equipment, *this->itemDatabase);
-  }
-  {
-    StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
-    this->characterStats->handleInput(static_cast<int>(input.mouseX),
-                                      static_cast<int>(input.mouseY), input.mousePressed, stats,
-                                      this->inventoryUi->isStatsVisible());
-  }
-  {
-    SkillTreeComponent& skillTree =
-        this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
-    this->skillTree->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
-                                 static_cast<int>(input.mouseY), input.mousePressed, skillTree,
-                                 *this->skillTreeDefinition, WINDOW_WIDTH);
-  }
+  updateUiInput(input);
 
   updateSkillBarAndBuffs(input, dt);
   updateLootPickup(input);
@@ -1486,9 +1431,8 @@ void Game::update(float dt) {
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
     this->shopPanel->handleInput(input.mouseX, input.mouseY, input.mouseWheelDelta, input.click,
-                                 WINDOW_WIDTH, WINDOW_HEIGHT,
-                                 this->shopPanelState, shop, inventory, stats,
-                                 *this->itemDatabase);
+                                 WINDOW_WIDTH, WINDOW_HEIGHT, this->shopPanelState, shop, inventory,
+                                 stats, *this->itemDatabase);
   }
   if (this->questLogVisible && !this->shopOpen && input.mouseWheelDelta != 0.0f) {
     const SDL_FRect panel = this->questLogUi->panelRect(WINDOW_WIDTH, WINDOW_HEIGHT);
@@ -1586,8 +1530,8 @@ void Game::render() {
         buildQuestTurnInWorldMarkers(questLog, *this->questDatabase, npcMarkers);
     for (const Position& npcCenter : markers) {
       SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-      drawCircle(this->renderer, Position(npcCenter.x, npcCenter.y - 18.0f), 6.0f,
-                 cameraPosition, SDL_Color{255, 220, 80, 200});
+      drawCircle(this->renderer, Position(npcCenter.x, npcCenter.y - 18.0f), 6.0f, cameraPosition,
+                 SDL_Color{255, 220, 80, 200});
     }
   }
 
@@ -1609,12 +1553,11 @@ void Game::render() {
         this->registry->getComponent<TransformComponent>(this->playerEntityId);
     const CollisionComponent& playerCollision =
         this->registry->getComponent<CollisionComponent>(this->playerEntityId);
-    const float centerX = playerTransform.position.x + (playerCollision.width / 2.0f);
-    const float centerY = playerTransform.position.y + (playerCollision.height / 2.0f);
+    const Position playerCenter = this->playerCenter();
     const float markerOffset = (playerCollision.width / 2.0f) + 2.0f;
     const float markerSize = 6.0f;
-    const float markerX = centerX + (this->facingX * markerOffset) - (markerSize / 2.0f);
-    const float markerY = centerY + (this->facingY * markerOffset) - (markerSize / 2.0f);
+    const float markerX = playerCenter.x + (this->facingX * markerOffset) - (markerSize / 2.0f);
+    const float markerY = playerCenter.y + (this->facingY * markerOffset) - (markerSize / 2.0f);
     SDL_SetRenderDrawColor(this->renderer, 255, 255, 255, 255);
     SDL_FRect markerRect = {markerX - cameraPosition.x, markerY - cameraPosition.y, markerSize,
                             markerSize};
@@ -1635,18 +1578,17 @@ void Game::render() {
     if (this->currentAutoTargetId != -1) {
       const HealthComponent& mobHealth =
           this->registry->getComponent<HealthComponent>(this->currentAutoTargetId);
-      if (mobHealth.current > 0 &&
-          !this->respawnSystem->isSpawning(this->currentAutoTargetId)) {
+      if (mobHealth.current > 0 && !this->respawnSystem->isSpawning(this->currentAutoTargetId)) {
         const TransformComponent& mobTransform =
             this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
         const CollisionComponent& mobCollision =
             this->registry->getComponent<CollisionComponent>(this->currentAutoTargetId);
         const Position mobCenter = centerForEntity(mobTransform, mobCollision);
         SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-        drawCircle(this->renderer, mobCenter, (mobCollision.width / 2.0f) + 6.0f,
-                   cameraPosition, SDL_Color{255, 230, 120, 220});
-        drawCircle(this->renderer, mobCenter, (mobCollision.width / 2.0f) + 3.0f,
-                   cameraPosition, SDL_Color{255, 255, 255, 140});
+        drawCircle(this->renderer, mobCenter, (mobCollision.width / 2.0f) + 6.0f, cameraPosition,
+                   SDL_Color{255, 230, 120, 220});
+        drawCircle(this->renderer, mobCenter, (mobCollision.width / 2.0f) + 3.0f, cameraPosition,
+                   SDL_Color{255, 255, 255, 140});
       }
     }
   }
@@ -1699,8 +1641,7 @@ void Game::render() {
           SDL_Color promptColor = {255, 245, 210, 255};
           SDL_Surface* promptSurface =
               TTF_RenderText_Solid(this->font, prompt.c_str(), prompt.length(), promptColor);
-          SDL_Texture* promptTexture =
-              SDL_CreateTextureFromSurface(this->renderer, promptSurface);
+          SDL_Texture* promptTexture = SDL_CreateTextureFromSurface(this->renderer, promptSurface);
           SDL_FRect promptRect = {lootTransform.position.x - cameraPosition.x - 6.0f,
                                   lootTransform.position.y - cameraPosition.y + TILE_SIZE + 4.0f,
                                   static_cast<float>(promptSurface->w),
@@ -1725,8 +1666,7 @@ void Game::render() {
       SDL_Surface* promptSurface =
           TTF_RenderText_Solid(this->font, prompt.c_str(), prompt.length(), promptColor);
       SDL_Texture* promptTexture = SDL_CreateTextureFromSurface(this->renderer, promptSurface);
-      SDL_FRect promptRect = {12.0f, WINDOW_HEIGHT - 140.0f,
-                              static_cast<float>(promptSurface->w),
+      SDL_FRect promptRect = {12.0f, WINDOW_HEIGHT - 140.0f, static_cast<float>(promptSurface->w),
                               static_cast<float>(promptSurface->h)};
       SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
@@ -1747,9 +1687,9 @@ void Game::render() {
           this->registry->getComponent<InventoryComponent>(this->playerEntityId);
       const StatsComponent& stats =
           this->registry->getComponent<StatsComponent>(this->playerEntityId);
-      this->shopPanel->render(this->renderer, this->font, WINDOW_WIDTH, WINDOW_HEIGHT,
-                              mouseX, mouseY, npc.name, this->shopPanelState, shop, inventory,
-                              stats, *this->itemDatabase);
+      this->shopPanel->render(this->renderer, this->font, WINDOW_WIDTH, WINDOW_HEIGHT, mouseX,
+                              mouseY, npc.name, this->shopPanelState, shop, inventory, stats,
+                              *this->itemDatabase);
     }
   }
 
@@ -1761,8 +1701,8 @@ void Game::render() {
           this->registry->getComponent<QuestLogComponent>(this->playerEntityId);
       const LevelComponent& level =
           this->registry->getComponent<LevelComponent>(this->playerEntityId);
-      const std::vector<QuestEntry> entries = buildNpcQuestEntries(
-          npc.name, *this->questSystem, *this->questDatabase, questLog, level);
+      const std::vector<QuestEntry> entries =
+          buildNpcQuestEntries(npc.name, *this->questSystem, *this->questDatabase, questLog, level);
       const std::string dialogText =
           buildNpcDialogText(npc.dialogLine, entries, this->activeNpcQuestSelection);
       renderNpcDialog(this->renderer, this->font, title, dialogText, WINDOW_WIDTH, WINDOW_HEIGHT,
@@ -1784,7 +1724,8 @@ void Game::render() {
             ? std::clamp(1.0f - (this->attackCooldownRemaining / cooldown), 0.0f, 1.0f)
             : 1.0f;
     SDL_FRect barBg = {playerTransform.position.x - cameraPosition.x,
-                       playerTransform.position.y - cameraPosition.y + playerCollision.height + 4.0f,
+                       playerTransform.position.y - cameraPosition.y + playerCollision.height +
+                           4.0f,
                        playerCollision.width, 4.0f};
     SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
@@ -1915,7 +1856,6 @@ void Game::render() {
     SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
     SDL_DestroySurface(surface);
     SDL_DestroyTexture(texture);
-
   }
 
   if (this->isPlayerGhost && this->hasCorpse) {
@@ -1985,11 +1925,9 @@ void Game::render() {
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
     const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
     this->characterStats->render(this->renderer, this->font, WINDOW_WIDTH, health, mana, level,
-                                 attackPower, className(playerClass.characterClass),
-                                 stats.strength, stats.gold, stats.dexterity, stats.intellect,
-                                 stats.luck,
-                                 stats.unspentPoints,
-                                 this->inventoryUi->isStatsVisible());
+                                 attackPower, className(playerClass.characterClass), stats.strength,
+                                 stats.gold, stats.dexterity, stats.intellect, stats.luck,
+                                 stats.unspentPoints, this->inventoryUi->isStatsVisible());
   }
 
   { // Quest log overlay
