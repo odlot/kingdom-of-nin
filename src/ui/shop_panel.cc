@@ -1,6 +1,7 @@
 #include "ui/shop_panel.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 constexpr float kRowHeight = 16.0f;
@@ -48,9 +49,8 @@ void ShopPanel::update(float dt, ShopPanelState& state) const {
 
 void ShopPanel::handleInput(float mouseX, float mouseY, float mouseWheelDelta, bool click,
                             int windowWidth, int windowHeight, ShopPanelState& state,
-                            ShopComponent& shop,
-                            InventoryComponent& inventory, StatsComponent& stats,
-                            const ItemDatabase& itemDatabase) const {
+                            ShopComponent& shop, InventoryComponent& inventory,
+                            StatsComponent& stats, const ItemDatabase& itemDatabase) const {
   const ShopLayout layout = shopLayout(windowWidth, windowHeight);
   const int shopVisibleRows = visibleRows(layout.shopRect);
   const int invVisibleRows = visibleRows(layout.inventoryRect);
@@ -68,10 +68,10 @@ void ShopPanel::handleInput(float mouseX, float mouseY, float mouseWheelDelta, b
       state.inventoryScroll -= mouseWheelDelta * kRowHeight;
     }
   }
-  state.shopScroll = std::clamp(state.shopScroll, 0.0f,
-                                static_cast<float>(shopMaxScrollRows) * kRowHeight);
-  state.inventoryScroll = std::clamp(state.inventoryScroll, 0.0f,
-                                     static_cast<float>(invMaxScrollRows) * kRowHeight);
+  state.shopScroll =
+      std::clamp(state.shopScroll, 0.0f, static_cast<float>(shopMaxScrollRows) * kRowHeight);
+  state.inventoryScroll =
+      std::clamp(state.inventoryScroll, 0.0f, static_cast<float>(invMaxScrollRows) * kRowHeight);
 
   const int shopStartIndex = static_cast<int>(std::floor(state.shopScroll / kRowHeight));
   const int invStartIndex = static_cast<int>(std::floor(state.inventoryScroll / kRowHeight));
@@ -123,19 +123,19 @@ void ShopPanel::handleInput(float mouseX, float mouseY, float mouseWheelDelta, b
 
 void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, int windowHeight,
                        float mouseX, float mouseY, const std::string& npcName,
-                       const ShopPanelState& state,
-                       const ShopComponent& shop, const InventoryComponent& inventory,
-                       const StatsComponent& stats, const ItemDatabase& itemDatabase) const {
+                       const ShopPanelState& state, const ShopComponent& shop,
+                       const InventoryComponent& inventory, const StatsComponent& stats,
+                       const ItemDatabase& itemDatabase) const {
   const ShopLayout layout = shopLayout(windowWidth, windowHeight);
   const int shopVisibleRows = visibleRows(layout.shopRect);
   const int invVisibleRows = visibleRows(layout.inventoryRect);
   const int shopMaxScrollRows = std::max(0, static_cast<int>(shop.stock.size()) - shopVisibleRows);
   const int invMaxScrollRows =
       std::max(0, static_cast<int>(inventory.items.size()) - invVisibleRows);
-  const float shopScroll = std::clamp(state.shopScroll, 0.0f,
-                                      static_cast<float>(shopMaxScrollRows) * kRowHeight);
-  const float inventoryScroll = std::clamp(state.inventoryScroll, 0.0f,
-                                           static_cast<float>(invMaxScrollRows) * kRowHeight);
+  const float shopScroll =
+      std::clamp(state.shopScroll, 0.0f, static_cast<float>(shopMaxScrollRows) * kRowHeight);
+  const float inventoryScroll =
+      std::clamp(state.inventoryScroll, 0.0f, static_cast<float>(invMaxScrollRows) * kRowHeight);
   const int shopStartIndex = static_cast<int>(std::floor(shopScroll / kRowHeight));
   const int invStartIndex = static_cast<int>(std::floor(inventoryScroll / kRowHeight));
 
@@ -151,12 +151,10 @@ void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, 
   SDL_Color hintColor = {180, 180, 180, 255};
 
   const std::string title = npcName + " - Shop";
-  SDL_Surface* titleSurface =
-      TTF_RenderText_Solid(font, title.c_str(), title.length(), titleColor);
+  SDL_Surface* titleSurface = TTF_RenderText_Solid(font, title.c_str(), title.length(), titleColor);
   SDL_Texture* titleTexture = SDL_CreateTextureFromSurface(renderer, titleSurface);
   SDL_FRect titleRect = {layout.panel.x + 12.0f, layout.panel.y + 8.0f,
-                         static_cast<float>(titleSurface->w),
-                         static_cast<float>(titleSurface->h)};
+                         static_cast<float>(titleSurface->w), static_cast<float>(titleSurface->h)};
   SDL_RenderTexture(renderer, titleTexture, nullptr, &titleRect);
   SDL_DestroySurface(titleSurface);
   SDL_DestroyTexture(titleTexture);
@@ -188,8 +186,7 @@ void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, 
       TTF_RenderText_Solid(font, invHeader.c_str(), invHeader.length(), headerColor);
   SDL_Texture* invTexture = SDL_CreateTextureFromSurface(renderer, invSurface);
   SDL_FRect invHeaderRect = {layout.inventoryRect.x, layout.inventoryRect.y - 18.0f,
-                             static_cast<float>(invSurface->w),
-                             static_cast<float>(invSurface->h)};
+                             static_cast<float>(invSurface->w), static_cast<float>(invSurface->h)};
   SDL_RenderTexture(renderer, invTexture, nullptr, &invHeaderRect);
   SDL_DestroySurface(invSurface);
   SDL_DestroyTexture(invTexture);
@@ -220,12 +217,10 @@ void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, 
     }
     const int price = itemPrice(def);
     const std::string line = def->name + " - " + std::to_string(price);
-    SDL_Surface* lineSurface =
-        TTF_RenderText_Solid(font, line.c_str(), line.length(), textColor);
+    SDL_Surface* lineSurface = TTF_RenderText_Solid(font, line.c_str(), line.length(), textColor);
     SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(renderer, lineSurface);
     SDL_FRect lineRect = {layout.shopRect.x, layout.shopRect.y + (i * kRowHeight),
-                          static_cast<float>(lineSurface->w),
-                          static_cast<float>(lineSurface->h)};
+                          static_cast<float>(lineSurface->w), static_cast<float>(lineSurface->h)};
     SDL_RenderTexture(renderer, lineTexture, nullptr, &lineRect);
     SDL_DestroySurface(lineSurface);
     SDL_DestroyTexture(lineTexture);
@@ -249,47 +244,39 @@ void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, 
     const int basePrice = itemPrice(def);
     const int sellPrice = basePrice > 0 ? std::max(1, basePrice / kSellDivisor) : 0;
     const std::string line = def->name + " - " + std::to_string(sellPrice);
-    SDL_Surface* lineSurface =
-        TTF_RenderText_Solid(font, line.c_str(), line.length(), textColor);
+    SDL_Surface* lineSurface = TTF_RenderText_Solid(font, line.c_str(), line.length(), textColor);
     SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(renderer, lineSurface);
     SDL_FRect lineRect = {layout.inventoryRect.x, layout.inventoryRect.y + (i * kRowHeight),
-                          static_cast<float>(lineSurface->w),
-                          static_cast<float>(lineSurface->h)};
+                          static_cast<float>(lineSurface->w), static_cast<float>(lineSurface->h)};
     SDL_RenderTexture(renderer, lineTexture, nullptr, &lineRect);
     SDL_DestroySurface(lineSurface);
     SDL_DestroyTexture(lineTexture);
   }
 
   const std::string hint = "Click item to buy/sell";
-  SDL_Surface* hintSurface =
-      TTF_RenderText_Solid(font, hint.c_str(), hint.length(), hintColor);
+  SDL_Surface* hintSurface = TTF_RenderText_Solid(font, hint.c_str(), hint.length(), hintColor);
   SDL_Texture* hintTexture = SDL_CreateTextureFromSurface(renderer, hintSurface);
   SDL_FRect hintRect = {layout.panel.x + 12.0f, layout.panel.y + layout.panel.h - 18.0f,
-                        static_cast<float>(hintSurface->w),
-                        static_cast<float>(hintSurface->h)};
+                        static_cast<float>(hintSurface->w), static_cast<float>(hintSurface->h)};
   SDL_RenderTexture(renderer, hintTexture, nullptr, &hintRect);
   SDL_DestroySurface(hintSurface);
   SDL_DestroyTexture(hintTexture);
 
   if (shopHoveredRow >= 0) {
     const int index = shopStartIndex + shopHoveredRow;
-    const ItemDef* def =
-        (index >= 0 && index < static_cast<int>(shop.stock.size()))
-            ? itemDatabase.getItem(shop.stock[index])
-            : nullptr;
+    const ItemDef* def = (index >= 0 && index < static_cast<int>(shop.stock.size()))
+                             ? itemDatabase.getItem(shop.stock[index])
+                             : nullptr;
     if (def) {
       const std::string tip = "Buy for " + std::to_string(itemPrice(def)) + " gold";
-      SDL_Surface* tipSurface =
-          TTF_RenderText_Solid(font, tip.c_str(), tip.length(), headerColor);
+      SDL_Surface* tipSurface = TTF_RenderText_Solid(font, tip.c_str(), tip.length(), headerColor);
       SDL_Texture* tipTexture = SDL_CreateTextureFromSurface(renderer, tipSurface);
       SDL_FRect tipRect = {layout.shopRect.x,
                            layout.shopRect.y + (shopHoveredRow * kRowHeight) - 18.0f,
-                           static_cast<float>(tipSurface->w),
-                           static_cast<float>(tipSurface->h)};
+                           static_cast<float>(tipSurface->w), static_cast<float>(tipSurface->h)};
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
-      SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f,
-                         tipRect.h + 4.0f};
+      SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f, tipRect.h + 4.0f};
       SDL_RenderFillRect(renderer, &tipBg);
       SDL_RenderTexture(renderer, tipTexture, nullptr, &tipRect);
       SDL_DestroySurface(tipSurface);
@@ -306,17 +293,14 @@ void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, 
       const int basePrice = itemPrice(def);
       const int sellPrice = basePrice > 0 ? std::max(1, basePrice / kSellDivisor) : 0;
       const std::string tip = "Sell for " + std::to_string(sellPrice) + " gold";
-      SDL_Surface* tipSurface =
-          TTF_RenderText_Solid(font, tip.c_str(), tip.length(), headerColor);
+      SDL_Surface* tipSurface = TTF_RenderText_Solid(font, tip.c_str(), tip.length(), headerColor);
       SDL_Texture* tipTexture = SDL_CreateTextureFromSurface(renderer, tipSurface);
       SDL_FRect tipRect = {layout.inventoryRect.x,
                            layout.inventoryRect.y + (invHoveredRow * kRowHeight) - 18.0f,
-                           static_cast<float>(tipSurface->w),
-                           static_cast<float>(tipSurface->h)};
+                           static_cast<float>(tipSurface->w), static_cast<float>(tipSurface->h)};
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
-      SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f,
-                         tipRect.h + 4.0f};
+      SDL_FRect tipBg = {tipRect.x - 4.0f, tipRect.y - 2.0f, tipRect.w + 8.0f, tipRect.h + 4.0f};
       SDL_RenderFillRect(renderer, &tipBg);
       SDL_RenderTexture(renderer, tipTexture, nullptr, &tipRect);
       SDL_DestroySurface(tipSurface);
@@ -328,9 +312,9 @@ void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, 
     const float trackX = layout.shopRect.x + layout.shopRect.w - 6.0f;
     const float trackY = layout.shopRect.y;
     const float trackH = layout.shopRect.h;
-    const float thumbH = std::max(18.0f, (static_cast<float>(shopVisibleRows) /
-                                          static_cast<float>(shop.stock.size())) *
-                                             trackH);
+    const float thumbH = std::max(
+        18.0f,
+        (static_cast<float>(shopVisibleRows) / static_cast<float>(shop.stock.size())) * trackH);
     const float scrollRatio =
         (shopMaxScrollRows > 0)
             ? (shopScroll / (static_cast<float>(shopMaxScrollRows) * kRowHeight))
@@ -348,9 +332,9 @@ void ShopPanel::render(SDL_Renderer* renderer, TTF_Font* font, int windowWidth, 
     const float trackX = layout.inventoryRect.x + layout.inventoryRect.w - 6.0f;
     const float trackY = layout.inventoryRect.y;
     const float trackH = layout.inventoryRect.h;
-    const float thumbH = std::max(18.0f, (static_cast<float>(invVisibleRows) /
-                                          static_cast<float>(inventory.items.size())) *
-                                             trackH);
+    const float thumbH = std::max(
+        18.0f,
+        (static_cast<float>(invVisibleRows) / static_cast<float>(inventory.items.size())) * trackH);
     const float scrollRatio =
         (invMaxScrollRows > 0)
             ? (inventoryScroll / (static_cast<float>(invMaxScrollRows) * kRowHeight))
