@@ -1,6 +1,7 @@
 #include "ui/quest_log.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -53,10 +54,9 @@ SDL_FRect QuestLog::panelRect(int windowWidth, int windowHeight) const {
   return ::panelRect(windowWidth, windowHeight);
 }
 
-void QuestLog::render(SDL_Renderer* renderer, TTF_Font* font,
-                      const QuestLogComponent& questLog, const QuestDatabase& questDatabase,
-                      const ItemDatabase& itemDatabase, int windowWidth, int windowHeight,
-                      bool isVisible, float& scroll) const {
+void QuestLog::render(SDL_Renderer* renderer, TTF_Font* font, const QuestLogComponent& questLog,
+                      const QuestDatabase& questDatabase, const ItemDatabase& itemDatabase,
+                      int windowWidth, int windowHeight, bool isVisible, float& scroll) const {
   if (!isVisible) {
     return;
   }
@@ -72,8 +72,7 @@ void QuestLog::render(SDL_Renderer* renderer, TTF_Font* font,
   SDL_Surface* titleSurface = TTF_RenderText_Solid(font, "Quest Log", 9, titleColor);
   SDL_Texture* titleTexture = SDL_CreateTextureFromSurface(renderer, titleSurface);
   SDL_FRect titleRect = {panel.x + PANEL_PADDING, panel.y + TITLE_OFFSET,
-                         static_cast<float>(titleSurface->w),
-                         static_cast<float>(titleSurface->h)};
+                         static_cast<float>(titleSurface->w), static_cast<float>(titleSurface->h)};
   SDL_RenderTexture(renderer, titleTexture, nullptr, &titleRect);
   SDL_DestroySurface(titleSurface);
   SDL_DestroyTexture(titleTexture);
@@ -91,11 +90,9 @@ void QuestLog::render(SDL_Renderer* renderer, TTF_Font* font,
   std::vector<LineEntry> lines;
 
   if (questLog.activeQuests.empty()) {
-    SDL_Surface* emptySurface =
-        TTF_RenderText_Solid(font, "No active quests.", 17, mutedColor);
+    SDL_Surface* emptySurface = TTF_RenderText_Solid(font, "No active quests.", 17, mutedColor);
     SDL_Texture* emptyTexture = SDL_CreateTextureFromSurface(renderer, emptySurface);
-    SDL_FRect emptyRect = {panel.x + PANEL_PADDING, textY,
-                           static_cast<float>(emptySurface->w),
+    SDL_FRect emptyRect = {panel.x + PANEL_PADDING, textY, static_cast<float>(emptySurface->w),
                            static_cast<float>(emptySurface->h)};
     SDL_RenderTexture(renderer, emptyTexture, nullptr, &emptyRect);
     SDL_DestroySurface(emptySurface);
@@ -110,12 +107,11 @@ void QuestLog::render(SDL_Renderer* renderer, TTF_Font* font,
       if (!def || def->category != category) {
         continue;
       }
-      const std::string title =
-          def->name + (progress.completed ? " (Complete)" : "");
+      const std::string title = def->name + (progress.completed ? " (Complete)" : "");
       lines.push_back(LineEntry{title, textColor, 0.0f, false});
       for (const QuestObjectiveProgress& objective : progress.objectives) {
-        lines.push_back(LineEntry{"- " + objectiveText(objective, itemDatabase), mutedColor, 6.0f,
-                                  false});
+        lines.push_back(
+            LineEntry{"- " + objectiveText(objective, itemDatabase), mutedColor, 6.0f, false});
       }
       lines.push_back(LineEntry{"", mutedColor, 0.0f, false});
     }
@@ -146,8 +142,7 @@ void QuestLog::render(SDL_Renderer* renderer, TTF_Font* font,
           TTF_RenderText_Solid(font, entry.text.c_str(), entry.text.length(), entry.color);
       SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(renderer, lineSurface);
       SDL_FRect lineRect = {panel.x + PANEL_PADDING + entry.indent, textY,
-                            static_cast<float>(lineSurface->w),
-                            static_cast<float>(lineSurface->h)};
+                            static_cast<float>(lineSurface->w), static_cast<float>(lineSurface->h)};
       SDL_RenderTexture(renderer, lineTexture, nullptr, &lineRect);
       SDL_DestroySurface(lineSurface);
       SDL_DestroyTexture(lineTexture);
