@@ -122,6 +122,25 @@ const char* className(CharacterClass characterClass) {
   return "Adventurer";
 }
 
+constexpr std::array<CharacterClass, 4> kClassUnlockChoices = {
+    CharacterClass::Warrior, CharacterClass::Mage, CharacterClass::Archer, CharacterClass::Rogue};
+
+const char* classUnlockLabel(CharacterClass characterClass) {
+  switch (characterClass) {
+  case CharacterClass::Warrior:
+    return "F1 - Warrior";
+  case CharacterClass::Mage:
+    return "F2 - Mage";
+  case CharacterClass::Archer:
+    return "F3 - Archer";
+  case CharacterClass::Rogue:
+    return "F4 - Rogue";
+  case CharacterClass::Any:
+    break;
+  }
+  return "";
+}
+
 float shortestAngleDiff(float from, float to) {
   constexpr float kPi = 3.14159265f;
   float diff = std::fmod(to - from, 2.0f * kPi);
@@ -202,6 +221,7 @@ Game::InputState Game::captureInput() {
   input.turnInQuestPressed = input.keyboardState[SDL_SCANCODE_C];
   input.questPrevPressed = input.keyboardState[SDL_SCANCODE_PAGEUP];
   input.questNextPressed = input.keyboardState[SDL_SCANCODE_PAGEDOWN];
+  input.classMenuPressed = input.keyboardState[SDL_SCANCODE_K];
 
   const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3,
                                                  SDL_SCANCODE_4, SDL_SCANCODE_5};
@@ -209,6 +229,15 @@ Game::InputState Game::captureInput() {
     input.skillPressed[i] = input.keyboardState[skillKeys[i]];
     input.skillJustPressed[i] = input.skillPressed[i] && !this->wasSkillPressed[i];
     this->wasSkillPressed[i] = input.skillPressed[i];
+  }
+
+  const std::array<SDL_Scancode, 4> classChoiceKeys = {SDL_SCANCODE_F1, SDL_SCANCODE_F2,
+                                                       SDL_SCANCODE_F3, SDL_SCANCODE_F4};
+  for (std::size_t i = 0; i < classChoiceKeys.size(); ++i) {
+    input.classChoicePressed[i] = input.keyboardState[classChoiceKeys[i]];
+    input.classChoiceJustPressed[i] =
+        input.classChoicePressed[i] && !this->wasClassChoicePressed[i];
+    this->wasClassChoicePressed[i] = input.classChoicePressed[i];
   }
 
   float mouseX = 0.0f;
@@ -238,6 +267,8 @@ Game::InputState Game::captureInput() {
   this->wasQuestPrevPressed = input.questPrevPressed;
   input.questNextJustPressed = input.questNextPressed && !this->wasQuestNextPressed;
   this->wasQuestNextPressed = input.questNextPressed;
+  input.classMenuJustPressed = input.classMenuPressed && !this->wasClassMenuPressed;
+  this->wasClassMenuPressed = input.classMenuPressed;
 
   input.mouseWheelDelta = this->mouseWheelDelta;
   this->mouseWheelDelta = 0.0f;
@@ -880,6 +911,85 @@ void Game::updateRegionAndQuestState() {
   applyLevelUps(level, stats, skillTree);
 }
 
+void Game::applyClassSelection(CharacterClass selectedClass) {
+  if (selectedClass == CharacterClass::Any) {
+    return;
+  }
+
+  InventoryComponent& inventory =
+      this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+  EquipmentComponent& equipment =
+      this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+  StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+  HealthComponent& health = this->registry->getComponent<HealthComponent>(this->playerEntityId);
+  ManaComponent& mana = this->registry->getComponent<ManaComponent>(this->playerEntityId);
+  ClassComponent& playerClass = this->registry->getComponent<ClassComponent>(this->playerEntityId);
+  const ClassDefaults defaults = classDefaultsFor(selectedClass);
+  playerClass.characterClass = selectedClass;
+  stats.baseAttackPower = defaults.baseAttackPower;
+  stats.baseArmor = defaults.baseArmor;
+  stats.strength = std::max(stats.strength, defaults.strength);
+  stats.dexterity = std::max(stats.dexterity, defaults.dexterity);
+  stats.intellect = std::max(stats.intellect, defaults.intellect);
+  stats.luck = std::max(stats.luck, defaults.luck);
+  health.max = std::max(health.max, defaults.health);
+  health.current = health.max;
+  mana.max = std::max(mana.max, defaults.mana);
+  mana.current = mana.max;
+
+  auto grantAndAutoEquip = [&](int itemId) {
+    if (itemId <= 0) {
+      return;
+    }
+    ItemInstance starter{itemId};
+    if (!inventory.addItem(starter)) {
+      return;
+    }
+    equipItemByIndex(inventory, equipment, *this->itemDatabase, inventory.items.size() - 1);
+  };
+  grantAndAutoEquip(defaults.weaponId);
+  grantAndAutoEquip(defaults.offhandId);
+
+  this->eventBus->emitFloatingTextEvent(
+      FloatingTextEvent{"Class selected: " + std::string(className(selectedClass)),
+                        this->playerCenter(), FloatingTextKind::Info});
+}
+
+void Game::updateClassUnlockAndSelection(const InputState& input) {
+  const LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+  const ClassComponent& playerClass =
+      this->registry->getComponent<ClassComponent>(this->playerEntityId);
+  if (playerClass.characterClass != CharacterClass::Any) {
+    this->classSelectionVisible = false;
+    return;
+  }
+  if (level.level < 10) {
+    return;
+  }
+
+  if (!this->classUnlockAnnounced) {
+    this->classUnlockAnnounced = true;
+    this->classSelectionVisible = true;
+    this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
+        "Class unlocked! Press K to choose.", this->playerCenter(), FloatingTextKind::Info});
+  }
+
+  if (input.classMenuJustPressed) {
+    this->classSelectionVisible = !this->classSelectionVisible;
+  }
+  if (!this->classSelectionVisible) {
+    return;
+  }
+
+  for (std::size_t i = 0; i < kClassUnlockChoices.size(); ++i) {
+    if (input.classChoiceJustPressed[i]) {
+      applyClassSelection(kClassUnlockChoices[i]);
+      this->classSelectionVisible = false;
+      return;
+    }
+  }
+}
+
 void Game::updateUiInput(const InputState& input) {
   {
     InventoryComponent& inventory =
@@ -1453,6 +1563,7 @@ void Game::update(float dt) {
   updatePlayerDeathState(input);
 
   updateRegionAndQuestState();
+  updateClassUnlockAndSelection(input);
   const Position currentPlayerCenter = playerCenter();
   this->camera->update(currentPlayerCenter);
 }
@@ -1856,6 +1967,71 @@ void Game::render() {
     SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
     SDL_DestroySurface(surface);
     SDL_DestroyTexture(texture);
+  }
+
+  { // Class unlock hint and selection overlay
+    const LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const ClassComponent& playerClass =
+        this->registry->getComponent<ClassComponent>(this->playerEntityId);
+    if (playerClass.characterClass == CharacterClass::Any && level.level >= 10) {
+      SDL_Color hintColor = {255, 240, 200, 255};
+      const std::string hint = "Class unlock available: Press K";
+      SDL_Surface* hintSurface =
+          TTF_RenderText_Solid(this->font, hint.c_str(), hint.length(), hintColor);
+      SDL_Texture* hintTexture = SDL_CreateTextureFromSurface(this->renderer, hintSurface);
+      SDL_FRect hintRect = {12.0f, 40.0f, static_cast<float>(hintSurface->w),
+                            static_cast<float>(hintSurface->h)};
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 170);
+      SDL_FRect hintBg = {hintRect.x - 6.0f, hintRect.y - 4.0f, hintRect.w + 12.0f,
+                          hintRect.h + 8.0f};
+      SDL_RenderFillRect(this->renderer, &hintBg);
+      SDL_RenderTexture(this->renderer, hintTexture, nullptr, &hintRect);
+      SDL_DestroySurface(hintSurface);
+      SDL_DestroyTexture(hintTexture);
+    }
+
+    if (this->classSelectionVisible && playerClass.characterClass == CharacterClass::Any &&
+        level.level >= 10) {
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 150);
+      SDL_FRect dimRect = {0.0f, 0.0f, static_cast<float>(WINDOW_WIDTH),
+                           static_cast<float>(WINDOW_HEIGHT)};
+      SDL_RenderFillRect(this->renderer, &dimRect);
+
+      SDL_FRect panel = {WINDOW_WIDTH * 0.5f - 180.0f, WINDOW_HEIGHT * 0.5f - 110.0f, 360.0f,
+                         220.0f};
+      SDL_SetRenderDrawColor(this->renderer, 16, 20, 30, 235);
+      SDL_RenderFillRect(this->renderer, &panel);
+      SDL_SetRenderDrawColor(this->renderer, 240, 240, 240, 200);
+      SDL_RenderRect(this->renderer, &panel);
+
+      auto renderOverlayText = [&](const std::string& text, float x, float y, SDL_Color color) {
+        SDL_Surface* lineSurface =
+            TTF_RenderText_Solid(this->font, text.c_str(), text.length(), color);
+        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
+        SDL_FRect lineRect = {x, y, static_cast<float>(lineSurface->w),
+                              static_cast<float>(lineSurface->h)};
+        SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
+        SDL_DestroySurface(lineSurface);
+        SDL_DestroyTexture(lineTexture);
+      };
+
+      renderOverlayText("Choose your class", panel.x + 16.0f, panel.y + 14.0f,
+                        SDL_Color{255, 255, 255, 255});
+      renderOverlayText("Your choice grants class starter gear.", panel.x + 16.0f, panel.y + 36.0f,
+                        SDL_Color{200, 220, 255, 255});
+
+      float optionY = panel.y + 70.0f;
+      for (CharacterClass option : kClassUnlockChoices) {
+        renderOverlayText(classUnlockLabel(option), panel.x + 24.0f, optionY,
+                          SDL_Color{255, 245, 210, 255});
+        optionY += 28.0f;
+      }
+      renderOverlayText("Press K to close", panel.x + 16.0f, panel.y + panel.h - 24.0f,
+                        SDL_Color{180, 180, 180, 255});
+    }
   }
 
   if (this->isPlayerGhost && this->hasCorpse) {
