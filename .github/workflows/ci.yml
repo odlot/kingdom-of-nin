@@ -4,13 +4,23 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -18,20 +28,25 @@ defaults:
 
 jobs:
   build-and-test:
+    name: build-and-test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CTEST_OUTPUT_ON_FAILURE: "1"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
             build-essential \
             cmake \
             pkg-config \
@@ -55,17 +70,31 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew update
-          brew install cmake pkg-config freetype harfbuzz opencv llvm
+          packages=(cmake pkg-config freetype harfbuzz opencv llvm)
+          for pkg in "${packages[@]}"; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
       - name: Configure and build
         run: scripts/check-build.sh
 
       - name: Run tests
-        run: ctest --test-dir build
+        run: ctest --test-dir build --output-on-failure
 
       - name: Configure clang-tidy
         run: cmake -S . -B build-tidy -DKINGDOM_OF_NIN_ENABLE_CLANG_TIDY=ON
 
       - name: Build with clang-tidy
         run: cmake --build build-tidy
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ matrix.os }}-${{ github.run_id }}
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+            build-tidy/CMakeFiles/CMakeOutput.log
+            build-tidy/CMakeFiles/CMakeError.log
+          if-no-files-found: ignore
