@@ -6,6 +6,11 @@ target_sources(ui
     inventory.cc
     character_stats.cc
     quest_log.cc
+    text_utils.cc
+    npc_dialog.cc
+    shop_panel.cc
+    render_utils.cc
+    quest_marker_helpers.cc
     skill_bar.cc
     buff_bar.cc
     skill_tree.cc
@@ -19,6 +24,11 @@ target_sources(ui
       ${CMAKE_SOURCE_DIR}/include/ui/inventory.h
       ${CMAKE_SOURCE_DIR}/include/ui/character_stats.h
       ${CMAKE_SOURCE_DIR}/include/ui/quest_log.h
+      ${CMAKE_SOURCE_DIR}/include/ui/shop_panel.h
+      ${CMAKE_SOURCE_DIR}/include/ui/render_utils.h
+      ${CMAKE_SOURCE_DIR}/include/ui/text_utils.h
+      ${CMAKE_SOURCE_DIR}/include/ui/npc_dialog.h
+      ${CMAKE_SOURCE_DIR}/include/ui/quest_marker_helpers.h
       ${CMAKE_SOURCE_DIR}/include/ui/skill_bar.h
       ${CMAKE_SOURCE_DIR}/include/ui/buff_bar.h
       ${CMAKE_SOURCE_DIR}/include/ui/skill_tree.h

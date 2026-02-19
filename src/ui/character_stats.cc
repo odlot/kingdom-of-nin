@@ -22,17 +22,23 @@ SDL_FRect statsPanelRect(int windowWidth) {
 
 SDL_FRect statPlusRect(const SDL_FRect& panel, int index) {
   float y = panel.y + LIST_Y_OFFSET + (index * LINE_HEIGHT);
-  return SDL_FRect{panel.x + panel.w - 22.0f, y + 2.0f, PLUS_BOX_SIZE,
-                   PLUS_BOX_SIZE};
+  return SDL_FRect{panel.x + panel.w - 22.0f, y + 2.0f, PLUS_BOX_SIZE, PLUS_BOX_SIZE};
 }
 
 bool pointInRect(int x, int y, const SDL_FRect& rect) {
-  return x >= rect.x && x <= rect.x + rect.w && y >= rect.y &&
-         y <= rect.y + rect.h;
+  return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
 }
 } // namespace
 
-void CharacterStats::handleInput(int mouseX, int mouseY, bool mousePressed,
+SDL_FRect CharacterStats::panelRectForTesting(int windowWidth) {
+  return statsPanelRect(windowWidth);
+}
+
+SDL_FRect CharacterStats::plusRectForTesting(const SDL_FRect& panel, int index) {
+  return statPlusRect(panel, index);
+}
+
+void CharacterStats::handleInput(int mouseX, int mouseY, bool mousePressed, int windowWidth,
                                  StatsComponent& stats, bool isVisible) {
   const bool click = mousePressed && !wasMousePressed;
   wasMousePressed = mousePressed;
@@ -40,7 +46,7 @@ void CharacterStats::handleInput(int mouseX, int mouseY, bool mousePressed,
     return;
   }
 
-  SDL_FRect panel = statsPanelRect(0);
+  SDL_FRect panel = statsPanelRect(windowWidth);
   const SDL_FRect plusRects[4] = {
       statPlusRect(panel, STAT_LINE_START + 0),
       statPlusRect(panel, STAT_LINE_START + 1),
@@ -75,8 +81,7 @@ void CharacterStats::render(SDL_Renderer* renderer, TTF_Font* font, int windowWi
                             const HealthComponent& health, const ManaComponent& mana,
                             const LevelComponent& level, int attackPower,
                             const std::string& className, int strength, int gold, int dexterity,
-                            int intellect, int luck, int unspentPoints,
-                            bool isVisible) const {
+                            int intellect, int luck, int unspentPoints, bool isVisible) const {
   if (!isVisible) {
     return;
   }
@@ -88,6 +93,23 @@ void CharacterStats::render(SDL_Renderer* renderer, TTF_Font* font, int windowWi
   SDL_RenderFillRect(renderer, &panel);
   SDL_SetRenderDrawColor(renderer, 255, 255, 255, 180);
   SDL_RenderRect(renderer, &panel);
+
+  if (unspentPoints > 0) {
+    SDL_Color hintColor = {255, 230, 140, 255};
+    const std::string hint = "Spend your stat points (+)";
+    SDL_Surface* hintSurface =
+        TTF_RenderText_Solid(font, hint.c_str(), static_cast<int>(hint.size()), hintColor);
+    SDL_Texture* hintTexture = SDL_CreateTextureFromSurface(renderer, hintSurface);
+    SDL_FRect hintRect = {panel.x + 8.0f, panel.y - 18.0f, static_cast<float>(hintSurface->w),
+                          static_cast<float>(hintSurface->h)};
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 160);
+    SDL_FRect hintBg = {hintRect.x - 4.0f, hintRect.y - 2.0f, hintRect.w + 8.0f, hintRect.h + 4.0f};
+    SDL_RenderFillRect(renderer, &hintBg);
+    SDL_RenderTexture(renderer, hintTexture, nullptr, &hintRect);
+    SDL_DestroySurface(hintSurface);
+    SDL_DestroyTexture(hintTexture);
+  }
 
   SDL_Surface* titleSurface = TTF_RenderText_Solid(font, "Character Stats", 15, textColor);
   SDL_Texture* titleTexture = SDL_CreateTextureFromSurface(renderer, titleSurface);
@@ -131,10 +153,8 @@ void CharacterStats::render(SDL_Renderer* renderer, TTF_Font* font, int windowWi
       SDL_SetRenderDrawColor(renderer, 255, 255, 255, 220);
       SDL_RenderRect(renderer, &plusRect);
 
-      SDL_Surface* plusSurface =
-          TTF_RenderText_Solid(font, "+", 1, textColor);
-      SDL_Texture* plusTexture =
-          SDL_CreateTextureFromSurface(renderer, plusSurface);
+      SDL_Surface* plusSurface = TTF_RenderText_Solid(font, "+", 1, textColor);
+      SDL_Texture* plusTexture = SDL_CreateTextureFromSurface(renderer, plusSurface);
       SDL_FRect plusTextRect = {plusRect.x + 3.0f, plusRect.y - 1.0f,
                                 static_cast<float>(plusSurface->w),
                                 static_cast<float>(plusSurface->h)};

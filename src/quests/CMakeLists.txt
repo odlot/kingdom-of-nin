@@ -3,6 +3,7 @@ add_library(quests)
 target_sources(quests
   PRIVATE
     quest_database.cc
+    quest_helpers.cc
     quest_system.cc
   PUBLIC
     FILE_SET questHeaders
@@ -11,6 +12,7 @@ target_sources(quests
     FILES
       ${CMAKE_SOURCE_DIR}/include/quests/quest.h
       ${CMAKE_SOURCE_DIR}/include/quests/quest_database.h
+      ${CMAKE_SOURCE_DIR}/include/quests/quest_helpers.h
       ${CMAKE_SOURCE_DIR}/include/quests/quest_system.h
 )
 

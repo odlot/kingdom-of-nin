@@ -28,6 +28,7 @@ target_sources(game
   PRIVATE
     game.cc
     camera.cc
+    gameplay/projectile_system.cc
 
   PUBLIC
     FILE_SET gameHeaders
@@ -37,6 +38,7 @@ target_sources(game
     FILES
       ${CMAKE_SOURCE_DIR}/include/game.h
       ${CMAKE_SOURCE_DIR}/include/camera.h
+      ${CMAKE_SOURCE_DIR}/include/gameplay/projectile_system.h
 )
 
 target_link_libraries(game PUBLIC SDL3_ttf::SDL3_ttf SDL3::SDL3 world ui items events skills quests

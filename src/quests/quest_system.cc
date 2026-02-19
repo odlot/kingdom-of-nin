@@ -26,6 +26,15 @@ bool isQuestActive(const QuestLogComponent& questLog, int questId) {
   }
   return false;
 }
+
+void applyRewards(const QuestReward& reward, StatsComponent& stats, LevelComponent& level,
+                  InventoryComponent& inventory) {
+  stats.gold += reward.gold;
+  level.experience += reward.experience;
+  if (reward.itemId > 0) {
+    inventory.addItem(ItemInstance{reward.itemId});
+  }
+}
 } // namespace
 
 QuestSystem::QuestSystem(const QuestDatabase& database) : database(database) {}
@@ -121,11 +130,7 @@ void QuestSystem::update(EventBus& eventBus, QuestLogComponent& questLog, StatsC
       continue;
     }
     if (def->turnInNpcName.empty()) {
-      stats.gold += def->reward.gold;
-      level.experience += def->reward.experience;
-      if (def->reward.itemId > 0) {
-        inventory.addItem(ItemInstance{def->reward.itemId});
-      }
+      applyRewards(def->reward, stats, level, inventory);
       quest.rewardsClaimed = true;
     }
   }
@@ -150,11 +155,7 @@ std::vector<std::string> QuestSystem::tryTurnIn(const std::string& npcName,
     if (def->turnInNpcName != npcName) {
       continue;
     }
-    stats.gold += def->reward.gold;
-    level.experience += def->reward.experience;
-    if (def->reward.itemId > 0) {
-      inventory.addItem(ItemInstance{def->reward.itemId});
-    }
+    applyRewards(def->reward, stats, level, inventory);
     quest.rewardsClaimed = true;
     completed.push_back(def->name);
   }
