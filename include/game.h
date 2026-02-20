@@ -15,6 +15,8 @@
 #include "ecs/system/respawn_system.h"
 #include "events/event_bus.h"
 #include "items/item_database.h"
+#include "quests/quest_database.h"
+#include "quests/quest_system.h"
 #include "skills/skill_database.h"
 #include "skills/skill_tree.h"
 #include "ui/buff_bar.h"
@@ -26,8 +28,6 @@
 #include "ui/shop_panel.h"
 #include "ui/skill_bar.h"
 #include "ui/skill_tree.h"
-#include "quests/quest_database.h"
-#include "quests/quest_system.h"
 #include "world/map.h"
 
 const int WINDOW_WIDTH = 640;
@@ -68,6 +68,10 @@ private:
     bool questPrevJustPressed = false;
     bool questNextPressed = false;
     bool questNextJustPressed = false;
+    bool classMenuPressed = false;
+    bool classMenuJustPressed = false;
+    std::array<bool, 4> classChoicePressed = {false, false, false, false};
+    std::array<bool, 4> classChoiceJustPressed = {false, false, false, false};
     float mouseX = 0.0f;
     float mouseY = 0.0f;
     bool mousePressed = false;
@@ -82,11 +86,13 @@ private:
   void updateMobBehavior(float dt);
   void updatePlayerDeathState(const InputState& input);
   void updateRegionAndQuestState();
+  void updateClassUnlockAndSelection(const InputState& input);
   void updateUiInput(const InputState& input);
   void updateSystems(const std::pair<int, int>& movementInput, float dt);
   void updateLootPickup(const InputState& input);
   void updateSkillBarAndBuffs(const InputState& input, float dt);
   void updateToggles(const InputState& input);
+  void applyClassSelection(CharacterClass selectedClass);
   Position playerCenter() const;
 
   SDL_Window* window = nullptr;
@@ -129,6 +135,8 @@ private:
   bool wasTurnInQuestPressed = false;
   bool wasQuestPrevPressed = false;
   bool wasQuestNextPressed = false;
+  bool wasClassMenuPressed = false;
+  std::array<bool, 4> wasClassChoicePressed = {false, false, false, false};
   bool showDebugMobRanges = false;
   int lastRegionIndex = -1;
   float playerHitFlashTimer = 0.0f;
@@ -145,6 +153,8 @@ private:
   int activeNpcQuestSelection = 0;
   bool shopOpen = false;
   bool questLogVisible = false;
+  bool classSelectionVisible = false;
+  bool classUnlockAnnounced = false;
   float questLogScroll = 0.0f;
   ShopPanelState shopPanelState;
   float npcDialogScroll = 0.0f;

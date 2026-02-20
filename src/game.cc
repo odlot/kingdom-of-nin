@@ -60,8 +60,6 @@ constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
 constexpr float AUTO_TARGET_RANGE_MULTIPLIER = 2.0f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
 constexpr float NPC_INTERACT_RANGE = 52.0f;
-constexpr float PLAYER_CRIT_CHANCE = 0.12f;
-constexpr float PLAYER_CRIT_MULTIPLIER = 1.5f;
 constexpr float FACING_TURN_SPEED = 8.0f;
 constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
 constexpr float PUSHBACK_DURATION = 0.2f;
@@ -120,6 +118,25 @@ const char* className(CharacterClass characterClass) {
     break;
   }
   return "Adventurer";
+}
+
+constexpr std::array<CharacterClass, 4> kClassUnlockChoices = {
+    CharacterClass::Warrior, CharacterClass::Mage, CharacterClass::Archer, CharacterClass::Rogue};
+
+const char* classUnlockLabel(CharacterClass characterClass) {
+  switch (characterClass) {
+  case CharacterClass::Warrior:
+    return "F1 - Warrior";
+  case CharacterClass::Mage:
+    return "F2 - Mage";
+  case CharacterClass::Archer:
+    return "F3 - Archer";
+  case CharacterClass::Rogue:
+    return "F4 - Rogue";
+  case CharacterClass::Any:
+    break;
+  }
+  return "";
 }
 
 float shortestAngleDiff(float from, float to) {
@@ -202,6 +219,7 @@ Game::InputState Game::captureInput() {
   input.turnInQuestPressed = input.keyboardState[SDL_SCANCODE_C];
   input.questPrevPressed = input.keyboardState[SDL_SCANCODE_PAGEUP];
   input.questNextPressed = input.keyboardState[SDL_SCANCODE_PAGEDOWN];
+  input.classMenuPressed = input.keyboardState[SDL_SCANCODE_K];
 
   const std::array<SDL_Scancode, 5> skillKeys = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3,
                                                  SDL_SCANCODE_4, SDL_SCANCODE_5};
@@ -209,6 +227,15 @@ Game::InputState Game::captureInput() {
     input.skillPressed[i] = input.keyboardState[skillKeys[i]];
     input.skillJustPressed[i] = input.skillPressed[i] && !this->wasSkillPressed[i];
     this->wasSkillPressed[i] = input.skillPressed[i];
+  }
+
+  const std::array<SDL_Scancode, 4> classChoiceKeys = {SDL_SCANCODE_F1, SDL_SCANCODE_F2,
+                                                       SDL_SCANCODE_F3, SDL_SCANCODE_F4};
+  for (std::size_t i = 0; i < classChoiceKeys.size(); ++i) {
+    input.classChoicePressed[i] = input.keyboardState[classChoiceKeys[i]];
+    input.classChoiceJustPressed[i] =
+        input.classChoicePressed[i] && !this->wasClassChoicePressed[i];
+    this->wasClassChoicePressed[i] = input.classChoicePressed[i];
   }
 
   float mouseX = 0.0f;
@@ -238,6 +265,8 @@ Game::InputState Game::captureInput() {
   this->wasQuestPrevPressed = input.questPrevPressed;
   input.questNextJustPressed = input.questNextPressed && !this->wasQuestNextPressed;
   this->wasQuestNextPressed = input.questNextPressed;
+  input.classMenuJustPressed = input.classMenuPressed && !this->wasClassMenuPressed;
+  this->wasClassMenuPressed = input.classMenuPressed;
 
   input.mouseWheelDelta = this->mouseWheelDelta;
   this->mouseWheelDelta = 0.0f;
@@ -256,6 +285,57 @@ int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& eq
     total += def->stats.attackPower;
   }
   return total;
+}
+
+int computeArmor(const StatsComponent& stats, const EquipmentComponent& equipment,
+                 const ItemDatabase& database) {
+  int total = stats.baseArmor;
+  for (const auto& entry : equipment.equipped) {
+    const ItemDef* def = database.getItem(entry.second.itemId);
+    if (!def) {
+      continue;
+    }
+    total += def->stats.armor;
+  }
+  return total;
+}
+
+void refreshSecondaryStats(StatsComponent& stats) {
+  stats.critChanceBonus = std::clamp(0.0025f * static_cast<float>(stats.luck), 0.0f, 0.35f);
+  stats.critDamageBonus = std::clamp(0.01f * static_cast<float>(stats.luck), 0.0f, 1.2f);
+  stats.accuracy = std::clamp(0.72f + (0.012f * static_cast<float>(stats.dexterity)) +
+                                  (0.0015f * static_cast<float>(stats.luck)),
+                              0.72f, 0.99f);
+  stats.dodge = std::clamp((0.0025f * static_cast<float>(stats.dexterity)) +
+                               (0.001f * static_cast<float>(stats.luck)),
+                           0.0f, 0.35f);
+  stats.parry = std::clamp((0.0015f * static_cast<float>(stats.strength)) +
+                               (0.001f * static_cast<float>(stats.dexterity)),
+                           0.0f, 0.25f);
+}
+
+float playerCritChance(const StatsComponent& stats) {
+  return std::clamp(0.05f + stats.critChanceBonus, 0.05f, 0.65f);
+}
+
+float playerCritMultiplier(const StatsComponent& stats) {
+  return std::clamp(1.5f + stats.critDamageBonus, 1.25f, 3.0f);
+}
+
+float mobEvasionChance(const MobComponent& mob) {
+  float base = 0.02f;
+  switch (mob.type) {
+  case MobType::Goblin:
+    base = 0.03f;
+    break;
+  case MobType::GoblinArcher:
+    base = 0.06f;
+    break;
+  case MobType::GoblinBrute:
+    base = 0.015f;
+    break;
+  }
+  return std::clamp(base + (0.002f * static_cast<float>(mob.level)), 0.01f, 0.25f);
 }
 
 float squaredDistance(const Position& a, const Position& b) {
@@ -431,13 +511,18 @@ void applyLevelUps(LevelComponent& level, StatsComponent& stats, SkillTreeCompon
 }
 
 bool equipItemByIndex(InventoryComponent& inventory, EquipmentComponent& equipment,
-                      const ItemDatabase& database, std::size_t index) {
+                      const ItemDatabase& database, std::size_t index, int playerLevel,
+                      CharacterClass playerClass) {
   std::optional<ItemInstance> item = inventory.takeItemAt(index);
   if (!item.has_value()) {
     return false;
   }
   const ItemDef* def = database.getItem(item->itemId);
   if (!def) {
+    inventory.addItem(*item);
+    return false;
+  }
+  if (!meetsEquipRequirements(*def, playerLevel, playerClass)) {
     inventory.addItem(*item);
     return false;
   }
@@ -704,13 +789,11 @@ void Game::updatePlayerAttack(float dt) {
       this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
   const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
   const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
-  std::uniform_real_distribution<float> critRoll(0.0f, 1.0f);
-  const bool isCrit = critRoll(this->rng) <= PLAYER_CRIT_CHANCE;
-  const int attackDamage =
-      isCrit ? static_cast<int>(std::round(attackPower * PLAYER_CRIT_MULTIPLIER)) : attackPower;
+  std::uniform_real_distribution<float> chanceRoll(0.0f, 1.0f);
 
   const TransformComponent& mobTransform =
       this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
+  const MobComponent& mob = this->registry->getComponent<MobComponent>(this->currentAutoTargetId);
   const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
                            mobTransform.position.y + (TILE_SIZE / 2.0f));
   const Position playerCenter = this->playerCenter();
@@ -718,6 +801,17 @@ void Game::updatePlayerAttack(float dt) {
   if (squaredDistance(playerCenter, mobCenter) > rangeSquared) {
     return;
   }
+  const float hitChance = std::clamp(stats.accuracy - mobEvasionChance(mob), 0.2f, 0.99f);
+  if (chanceRoll(this->rng) > hitChance) {
+    this->eventBus->emitFloatingTextEvent(
+        FloatingTextEvent{"Miss", mobCenter, FloatingTextKind::Info});
+    this->attackCooldownRemaining = attackProfile.cooldown;
+    return;
+  }
+  const bool isCrit = chanceRoll(this->rng) <= playerCritChance(stats);
+  const int attackDamage = isCrit ? static_cast<int>(std::round(static_cast<float>(attackPower) *
+                                                                playerCritMultiplier(stats)))
+                                  : attackPower;
 
   if (attackProfile.isRanged) {
     float dx = mobCenter.x - playerCenter.x;
@@ -795,12 +889,43 @@ void Game::updateMobBehavior(float dt) {
       if (playerAlive && squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
         HealthComponent& playerHealth =
             this->registry->getComponent<HealthComponent>(this->playerEntityId);
+        const LevelComponent& playerLevel =
+            this->registry->getComponent<LevelComponent>(this->playerEntityId);
+        const StatsComponent& playerStats =
+            this->registry->getComponent<StatsComponent>(this->playerEntityId);
+        const EquipmentComponent& playerEquipment =
+            this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
         if (playerHealth.current > 0) {
-          playerHealth.current = std::max(0, playerHealth.current - mob.attackDamage);
+          std::uniform_real_distribution<float> chanceRoll(0.0f, 1.0f);
+          const float levelPenalty =
+              std::max(0.0f, static_cast<float>(mob.level - playerLevel.level) * 0.004f);
+          const float parryChance = std::clamp(playerStats.parry - levelPenalty, 0.0f, 0.30f);
+          const float dodgeChance =
+              std::clamp(playerStats.dodge - (levelPenalty * 1.25f), 0.0f, 0.45f);
+          const float avoidRoll = chanceRoll(this->rng);
+          if (avoidRoll <= parryChance) {
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{"Parry", playerCenter, FloatingTextKind::Info});
+            mob.attackTimer = mob.attackCooldown;
+            continue;
+          }
+          if (avoidRoll <= parryChance + dodgeChance) {
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{"Dodge", playerCenter, FloatingTextKind::Info});
+            mob.attackTimer = mob.attackCooldown;
+            continue;
+          }
+
+          const int armor = computeArmor(playerStats, playerEquipment, *this->itemDatabase);
+          const float mitigation = std::clamp(
+              static_cast<float>(armor) / (100.0f + static_cast<float>(armor)), 0.0f, 0.60f);
+          const int damageTaken =
+              std::max(1, static_cast<int>(std::round(mob.attackDamage * (1.0f - mitigation))));
+          playerHealth.current = std::max(0, playerHealth.current - damageTaken);
           this->eventBus->emitDamageEvent(
-              DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
+              DamageEvent{mobEntityId, this->playerEntityId, damageTaken, playerCenter});
           this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
-              "-" + std::to_string(mob.attackDamage), playerCenter, FloatingTextKind::Damage});
+              "-" + std::to_string(damageTaken), playerCenter, FloatingTextKind::Damage});
           if (this->playerKnockbackImmunityRemaining <= 0.0f) {
             applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
                           PUSHBACK_DURATION);
@@ -878,6 +1003,89 @@ void Game::updateRegionAndQuestState() {
   SkillTreeComponent& skillTree =
       this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
   applyLevelUps(level, stats, skillTree);
+  refreshSecondaryStats(stats);
+}
+
+void Game::applyClassSelection(CharacterClass selectedClass) {
+  if (selectedClass == CharacterClass::Any) {
+    return;
+  }
+
+  InventoryComponent& inventory =
+      this->registry->getComponent<InventoryComponent>(this->playerEntityId);
+  EquipmentComponent& equipment =
+      this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+  StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
+  HealthComponent& health = this->registry->getComponent<HealthComponent>(this->playerEntityId);
+  ManaComponent& mana = this->registry->getComponent<ManaComponent>(this->playerEntityId);
+  const LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+  ClassComponent& playerClass = this->registry->getComponent<ClassComponent>(this->playerEntityId);
+  const ClassDefaults defaults = classDefaultsFor(selectedClass);
+  playerClass.characterClass = selectedClass;
+  stats.baseAttackPower = defaults.baseAttackPower;
+  stats.baseArmor = defaults.baseArmor;
+  stats.strength = std::max(stats.strength, defaults.strength);
+  stats.dexterity = std::max(stats.dexterity, defaults.dexterity);
+  stats.intellect = std::max(stats.intellect, defaults.intellect);
+  stats.luck = std::max(stats.luck, defaults.luck);
+  refreshSecondaryStats(stats);
+  health.max = std::max(health.max, defaults.health);
+  health.current = health.max;
+  mana.max = std::max(mana.max, defaults.mana);
+  mana.current = mana.max;
+
+  auto grantAndAutoEquip = [&](int itemId) {
+    if (itemId <= 0) {
+      return;
+    }
+    ItemInstance starter{itemId};
+    if (!inventory.addItem(starter)) {
+      return;
+    }
+    equipItemByIndex(inventory, equipment, *this->itemDatabase, inventory.items.size() - 1,
+                     level.level, selectedClass);
+  };
+  grantAndAutoEquip(defaults.weaponId);
+  grantAndAutoEquip(defaults.offhandId);
+
+  this->eventBus->emitFloatingTextEvent(
+      FloatingTextEvent{"Class selected: " + std::string(className(selectedClass)),
+                        this->playerCenter(), FloatingTextKind::Info});
+}
+
+void Game::updateClassUnlockAndSelection(const InputState& input) {
+  const LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+  const ClassComponent& playerClass =
+      this->registry->getComponent<ClassComponent>(this->playerEntityId);
+  if (playerClass.characterClass != CharacterClass::Any) {
+    this->classSelectionVisible = false;
+    return;
+  }
+  if (level.level < 10) {
+    return;
+  }
+
+  if (!this->classUnlockAnnounced) {
+    this->classUnlockAnnounced = true;
+    this->classSelectionVisible = true;
+    this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
+        "Class unlocked! Press K to choose.", this->playerCenter(), FloatingTextKind::Info});
+  }
+
+  if (input.classMenuJustPressed) {
+    this->classSelectionVisible = !this->classSelectionVisible;
+  }
+  if (!this->classSelectionVisible) {
+    return;
+  }
+
+  for (std::size_t i = 0; i < kClassUnlockChoices.size(); ++i) {
+    if (input.classChoiceJustPressed[i]) {
+      applyClassSelection(kClassUnlockChoices[i]);
+      this->classSelectionVisible = false;
+      return;
+    }
+  }
 }
 
 void Game::updateUiInput(const InputState& input) {
@@ -886,9 +1094,13 @@ void Game::updateUiInput(const InputState& input) {
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    const LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const ClassComponent& characterClass =
+        this->registry->getComponent<ClassComponent>(this->playerEntityId);
     this->inventoryUi->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
                                    static_cast<int>(input.mouseY), input.mousePressed, inventory,
-                                   equipment, *this->itemDatabase);
+                                   equipment, *this->itemDatabase, level, characterClass);
   }
   {
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
@@ -1270,6 +1482,7 @@ Game::Game() {
     stats.dexterity = defaults.dexterity;
     stats.intellect = defaults.intellect;
     stats.luck = defaults.luck;
+    refreshSecondaryStats(stats);
     health.max = defaults.health;
     health.current = defaults.health;
     mana.max = defaults.mana;
@@ -1277,13 +1490,15 @@ Game::Game() {
     if (defaults.weaponId > 0) {
       ItemInstance weaponInstance{defaults.weaponId};
       if (inventory.addItem(weaponInstance)) {
-        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0, 1,
+                         playerClass.characterClass);
       }
     }
     if (defaults.offhandId > 0) {
       ItemInstance offhandInstance{defaults.offhandId};
       if (inventory.addItem(offhandInstance)) {
-        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0, 1,
+                         playerClass.characterClass);
       }
     }
   }
@@ -1453,6 +1668,7 @@ void Game::update(float dt) {
   updatePlayerDeathState(input);
 
   updateRegionAndQuestState();
+  updateClassUnlockAndSelection(input);
   const Position currentPlayerCenter = playerCenter();
   this->camera->update(currentPlayerCenter);
 }
@@ -1856,6 +2072,71 @@ void Game::render() {
     SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
     SDL_DestroySurface(surface);
     SDL_DestroyTexture(texture);
+  }
+
+  { // Class unlock hint and selection overlay
+    const LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const ClassComponent& playerClass =
+        this->registry->getComponent<ClassComponent>(this->playerEntityId);
+    if (playerClass.characterClass == CharacterClass::Any && level.level >= 10) {
+      SDL_Color hintColor = {255, 240, 200, 255};
+      const std::string hint = "Class unlock available: Press K";
+      SDL_Surface* hintSurface =
+          TTF_RenderText_Solid(this->font, hint.c_str(), hint.length(), hintColor);
+      SDL_Texture* hintTexture = SDL_CreateTextureFromSurface(this->renderer, hintSurface);
+      SDL_FRect hintRect = {12.0f, 40.0f, static_cast<float>(hintSurface->w),
+                            static_cast<float>(hintSurface->h)};
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 170);
+      SDL_FRect hintBg = {hintRect.x - 6.0f, hintRect.y - 4.0f, hintRect.w + 12.0f,
+                          hintRect.h + 8.0f};
+      SDL_RenderFillRect(this->renderer, &hintBg);
+      SDL_RenderTexture(this->renderer, hintTexture, nullptr, &hintRect);
+      SDL_DestroySurface(hintSurface);
+      SDL_DestroyTexture(hintTexture);
+    }
+
+    if (this->classSelectionVisible && playerClass.characterClass == CharacterClass::Any &&
+        level.level >= 10) {
+      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 150);
+      SDL_FRect dimRect = {0.0f, 0.0f, static_cast<float>(WINDOW_WIDTH),
+                           static_cast<float>(WINDOW_HEIGHT)};
+      SDL_RenderFillRect(this->renderer, &dimRect);
+
+      SDL_FRect panel = {WINDOW_WIDTH * 0.5f - 180.0f, WINDOW_HEIGHT * 0.5f - 110.0f, 360.0f,
+                         220.0f};
+      SDL_SetRenderDrawColor(this->renderer, 16, 20, 30, 235);
+      SDL_RenderFillRect(this->renderer, &panel);
+      SDL_SetRenderDrawColor(this->renderer, 240, 240, 240, 200);
+      SDL_RenderRect(this->renderer, &panel);
+
+      auto renderOverlayText = [&](const std::string& text, float x, float y, SDL_Color color) {
+        SDL_Surface* lineSurface =
+            TTF_RenderText_Solid(this->font, text.c_str(), text.length(), color);
+        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(this->renderer, lineSurface);
+        SDL_FRect lineRect = {x, y, static_cast<float>(lineSurface->w),
+                              static_cast<float>(lineSurface->h)};
+        SDL_RenderTexture(this->renderer, lineTexture, nullptr, &lineRect);
+        SDL_DestroySurface(lineSurface);
+        SDL_DestroyTexture(lineTexture);
+      };
+
+      renderOverlayText("Choose your class", panel.x + 16.0f, panel.y + 14.0f,
+                        SDL_Color{255, 255, 255, 255});
+      renderOverlayText("Your choice grants class starter gear.", panel.x + 16.0f, panel.y + 36.0f,
+                        SDL_Color{200, 220, 255, 255});
+
+      float optionY = panel.y + 70.0f;
+      for (CharacterClass option : kClassUnlockChoices) {
+        renderOverlayText(classUnlockLabel(option), panel.x + 24.0f, optionY,
+                          SDL_Color{255, 245, 210, 255});
+        optionY += 28.0f;
+      }
+      renderOverlayText("Press K to close", panel.x + 16.0f, panel.y + panel.h - 24.0f,
+                        SDL_Color{180, 180, 180, 255});
+    }
   }
 
   if (this->isPlayerGhost && this->hasCorpse) {

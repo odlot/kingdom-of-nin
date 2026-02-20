@@ -107,7 +107,8 @@ std::vector<SlotBox> equipmentSlotBoxes(const SDL_FRect& panel) {
 
 void Inventory::handleInput(const bool* keyboardState, int mouseX, int mouseY, bool mousePressed,
                             InventoryComponent& inventory, EquipmentComponent& equipment,
-                            const ItemDatabase& database) {
+                            const ItemDatabase& database, const LevelComponent& level,
+                            const ClassComponent& characterClass) {
   lastMouseX = mouseX;
   lastMouseY = mouseY;
 
@@ -143,6 +144,9 @@ void Inventory::handleInput(const bool* keyboardState, int mouseX, int mouseY, b
       const ItemInstance item = inventory.items[*index];
       const ItemDef* def = database.getItem(item.itemId);
       if (def) {
+        if (!meetsEquipRequirements(*def, level.level, characterClass.characterClass)) {
+          return;
+        }
         std::optional<ItemInstance> removed = inventory.takeItemAt(*index);
         if (!removed.has_value()) {
           return;
