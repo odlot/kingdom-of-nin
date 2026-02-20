@@ -20,6 +20,10 @@ enum class MobType {
   Ogre
 };
 
+enum class MobBehaviorType { Melee, Ranged, Caster, Bruiser, Skirmisher };
+
+enum class MobAbilityType { None, GoblinRage, UndeadDrain, BeastPounce, BanditTrick, ArcaneSurge };
+
 inline const char* mobTypeName(MobType type) {
   switch (type) {
   case MobType::Goblin:
@@ -60,11 +64,16 @@ class MobComponent : public Component {
 public:
   MobComponent(MobType type, int level, int homeX, int homeY, int regionX, int regionY,
                int regionWidth, int regionHeight, float aggroRange, float leashRange, float speed,
-               int experience, int attackDamage, float attackCooldown, float attackRange)
+               int experience, int attackDamage, float attackCooldown, float attackRange,
+               MobBehaviorType behavior = MobBehaviorType::Melee,
+               MobAbilityType abilityType = MobAbilityType::None, float preferredRange = 0.0f,
+               float abilityValue = 0.0f, float abilityCooldown = 8.0f)
       : level(level), homeX(homeX), homeY(homeY), regionX(regionX), regionY(regionY),
         regionWidth(regionWidth), regionHeight(regionHeight), aggroRange(aggroRange),
         leashRange(leashRange), speed(speed), experience(experience), type(type),
-        attackDamage(attackDamage), attackCooldown(attackCooldown), attackRange(attackRange) {}
+        attackDamage(attackDamage), attackCooldown(attackCooldown), attackRange(attackRange),
+        behavior(behavior), abilityType(abilityType), preferredRange(preferredRange),
+        abilityValue(abilityValue), abilityCooldown(abilityCooldown) {}
 
   int level;
   int homeX;
@@ -82,4 +91,10 @@ public:
   float attackCooldown;
   float attackRange;
   float attackTimer = 0.0f;
+  MobBehaviorType behavior;
+  MobAbilityType abilityType;
+  float preferredRange;
+  float abilityValue;
+  float abilityCooldown;
+  float abilityTimer = 0.0f;
 };

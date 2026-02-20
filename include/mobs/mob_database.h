@@ -33,6 +33,11 @@ struct MobArchetype {
   int maxSpawnTier = 11;
   int spawnWeight = 10;
   MobLootTable lootTable;
+  MobBehaviorType behavior = MobBehaviorType::Melee;
+  MobAbilityType abilityType = MobAbilityType::None;
+  float preferredRange = 0.0f;
+  float abilityValue = 0.0f;
+  float abilityCooldown = 8.0f;
 };
 
 struct MobResolvedStats {
@@ -46,6 +51,11 @@ struct MobResolvedStats {
   float speed = 60.0f;
   float aggroRange = 120.0f;
   float leashRange = 180.0f;
+  MobBehaviorType behavior = MobBehaviorType::Melee;
+  MobAbilityType abilityType = MobAbilityType::None;
+  float preferredRange = 0.0f;
+  float abilityValue = 0.0f;
+  float abilityCooldown = 8.0f;
 };
 
 class MobDatabase {
