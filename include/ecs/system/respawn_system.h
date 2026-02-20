@@ -29,7 +29,9 @@ private:
 
   struct SpawnRegionState {
     Region region;
-    int mobLevel = 1;
+    int minMobLevel = 1;
+    int maxMobLevel = 1;
+    int spawnTier = 0;
     std::vector<SpawnSlot> slots;
   };
 
