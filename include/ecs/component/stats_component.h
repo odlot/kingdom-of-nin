@@ -10,6 +10,11 @@ public:
   int dexterity = 5;
   int intellect = 5;
   int luck = 5;
+  float critChanceBonus = 0.0f;
+  float critDamageBonus = 0.0f;
+  float accuracy = 0.0f;
+  float dodge = 0.0f;
+  float parry = 0.0f;
   int unspentPoints = 0;
   int gold = 50;
 };
