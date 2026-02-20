@@ -43,6 +43,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -68,6 +69,27 @@ constexpr float PLAYER_KNOCKBACK_IMMUNITY_SECONDS = 2.0f;
 constexpr float RESURRECT_RANGE = 28.0f;
 
 namespace {
+constexpr unsigned int kCombatSeedSalt = 0xA53F91U;
+constexpr unsigned int kLootSeedSalt = 0xBADC0DEU;
+constexpr unsigned int kSpawnSeedSalt = 0x51EED123U;
+
+unsigned int readWorldSeed() {
+  const char* seedText = std::getenv("KINGDOM_OF_NIN_SEED");
+  if (!seedText || seedText[0] == '\0') {
+    return std::random_device{}();
+  }
+  char* end = nullptr;
+  const unsigned long parsed = std::strtoul(seedText, &end, 10);
+  if (!end || *end != '\0') {
+    return std::random_device{}();
+  }
+  return static_cast<unsigned int>(parsed);
+}
+
+unsigned int deriveSeed(unsigned int baseSeed, unsigned int salt) {
+  return baseSeed ^ (salt + 0x9E3779B9U + (baseSeed << 6U) + (baseSeed >> 2U));
+}
+
 std::optional<Coordinate> firstWalkableInRegion(const Map& map, const Region& region) {
   for (int y = region.y; y < region.y + region.height; ++y) {
     for (int x = region.x; x < region.x + region.width; ++x) {
@@ -820,13 +842,16 @@ void Game::updatePlayerAttack(float dt) {
       level.experience += mob.experience;
       this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
           "XP +" + std::to_string(mob.experience), hitPosition, FloatingTextKind::Info});
-      const int dropLevel = std::clamp(level.level, 1, PLAYER_LEVEL_CAP);
-      const int droppedItemId = this->itemDatabase->generateEquipmentDrop(
-          dropLevel, playerClass.characterClass, this->rng);
-      const TransformComponent& mobTransform =
-          this->registry->getComponent<TransformComponent>(mobEntityId);
-      createLootEntity(*this->registry, *this->itemDatabase, mobTransform.position, droppedItemId,
-                       this->lootEntityIds);
+      EquipmentDropGenerationOptions dropOptions;
+      if (this->mobDatabase->rollEquipmentDrop(mob.type, this->lootRng, dropOptions)) {
+        const int dropLevel = std::clamp(level.level, 1, PLAYER_LEVEL_CAP);
+        const int droppedItemId = this->itemDatabase->generateEquipmentDrop(
+            dropLevel, playerClass.characterClass, this->lootRng, dropOptions);
+        const TransformComponent& mobTransform =
+            this->registry->getComponent<TransformComponent>(mobEntityId);
+        createLootEntity(*this->registry, *this->itemDatabase, mobTransform.position, droppedItemId,
+                         this->lootEntityIds);
+      }
       GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
       mobGraphic.color = SDL_Color({80, 80, 80, 255});
     }
@@ -1447,7 +1472,10 @@ Game::Game() {
   if (!logger) {
     logger = spdlog::stdout_color_mt("console");
   }
-  this->rng = std::mt19937(std::random_device{}());
+  this->worldSeed = readWorldSeed();
+  this->rng = std::mt19937(deriveSeed(this->worldSeed, kCombatSeedSalt));
+  this->lootRng = std::mt19937(deriveSeed(this->worldSeed, kLootSeedSalt));
+  logger->info("World seed: {}", this->worldSeed);
   logger->info("Initializing SDL");
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     logger->error("SDL could not initialize! SDL_Error: {}", SDL_GetError());
@@ -1467,13 +1495,15 @@ Game::Game() {
   }
   this->registry = std::make_unique<Registry>();
   this->itemDatabase = std::make_unique<ItemDatabase>();
+  this->mobDatabase = std::make_unique<MobDatabase>();
   this->skillDatabase = std::make_unique<SkillDatabase>();
   this->skillTreeDefinition = std::make_unique<SkillTreeDefinition>();
   this->questDatabase = std::make_unique<QuestDatabase>();
   this->questSystem = std::make_unique<QuestSystem>(*this->questDatabase);
   this->eventBus = std::make_unique<EventBus>();
   this->floatingTextSystem = std::make_unique<FloatingTextSystem>(*this->eventBus);
-  this->respawnSystem = std::make_unique<RespawnSystem>();
+  this->respawnSystem = std::make_unique<RespawnSystem>(
+      *this->mobDatabase, deriveSeed(this->worldSeed, kSpawnSeedSalt));
   this->inventoryUi = std::make_unique<Inventory>();
   this->characterStats = std::make_unique<CharacterStats>();
   this->shopPanel = std::make_unique<ShopPanel>();

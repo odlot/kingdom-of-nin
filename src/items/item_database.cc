@@ -8,9 +8,9 @@
 
 namespace {
 constexpr int ITEM_LEVEL_CAP = 60;
-constexpr std::array<ItemSlot, 10> kDropSlots = {
-    ItemSlot::Weapon, ItemSlot::Weapon, ItemSlot::Shield, ItemSlot::Chest,     ItemSlot::Chest,
-    ItemSlot::Pants,  ItemSlot::Pants,  ItemSlot::Boots,  ItemSlot::Shoulders, ItemSlot::Cape};
+constexpr std::array<ItemSlot, 8> kArmorDropSlots = {
+    ItemSlot::Shield, ItemSlot::Chest, ItemSlot::Chest,     ItemSlot::Pants,
+    ItemSlot::Pants,  ItemSlot::Boots, ItemSlot::Shoulders, ItemSlot::Cape};
 
 constexpr std::array<const char*, 5> kCommonPrefixes = {"Worn", "Sturdy", "Reliable", "Fine",
                                                         "Traveler's"};
@@ -55,16 +55,44 @@ const char* classLabel(CharacterClass characterClass) {
   return "Adventurer";
 }
 
-ItemRarity rollRarity(std::mt19937& rng) {
-  std::uniform_int_distribution<int> dist(1, 100);
+ItemRarity rollRarity(std::mt19937& rng, const EquipmentDropGenerationOptions& options) {
+  int commonWeight = std::max(0, options.commonWeight);
+  int rareWeight = std::max(0, options.rareWeight);
+  int epicWeight = std::max(0, options.epicWeight);
+  int totalWeight = commonWeight + rareWeight + epicWeight;
+  if (totalWeight <= 0) {
+    commonWeight = 70;
+    rareWeight = 25;
+    epicWeight = 5;
+    totalWeight = commonWeight + rareWeight + epicWeight;
+  }
+  std::uniform_int_distribution<int> dist(1, totalWeight);
   const int roll = dist(rng);
-  if (roll <= 70) {
+  if (roll <= commonWeight) {
     return ItemRarity::Common;
   }
-  if (roll <= 95) {
+  if (roll <= commonWeight + rareWeight) {
     return ItemRarity::Rare;
   }
   return ItemRarity::Epic;
+}
+
+ItemSlot rollDropSlot(std::mt19937& rng, const EquipmentDropGenerationOptions& options) {
+  int weaponWeight = std::max(0, options.weaponWeight);
+  int armorWeight = std::max(0, options.armorWeight);
+  int totalWeight = weaponWeight + armorWeight;
+  if (totalWeight <= 0) {
+    weaponWeight = 35;
+    armorWeight = 65;
+    totalWeight = weaponWeight + armorWeight;
+  }
+  std::uniform_int_distribution<int> categoryDist(1, totalWeight);
+  const int categoryRoll = categoryDist(rng);
+  if (categoryRoll <= weaponWeight) {
+    return ItemSlot::Weapon;
+  }
+  std::uniform_int_distribution<std::size_t> armorSlotDist(0, kArmorDropSlots.size() - 1);
+  return kArmorDropSlots[armorSlotDist(rng)];
 }
 
 float rarityMultiplier(ItemRarity rarity) {
@@ -307,11 +335,11 @@ void ItemDatabase::addItem(ItemDef def) {
 }
 
 int ItemDatabase::generateEquipmentDrop(int targetLevel, CharacterClass preferredClass,
-                                        std::mt19937& rng) {
+                                        std::mt19937& rng,
+                                        const EquipmentDropGenerationOptions& options) {
   const int level = std::clamp(targetLevel, 1, ITEM_LEVEL_CAP);
-  const ItemRarity rarity = rollRarity(rng);
-  std::uniform_int_distribution<std::size_t> slotDist(0, kDropSlots.size() - 1);
-  const ItemSlot slot = kDropSlots[slotDist(rng)];
+  const ItemRarity rarity = rollRarity(rng, options);
+  const ItemSlot slot = rollDropSlot(rng, options);
 
   ItemDef generated;
   generated.id = this->nextGeneratedItemId++;

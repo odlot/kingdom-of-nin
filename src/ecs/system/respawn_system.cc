@@ -1,7 +1,6 @@
 #include "ecs/system/respawn_system.h"
 
 #include <algorithm>
-#include <array>
 #include <optional>
 
 #include "ecs/component/collision_component.h"
@@ -16,30 +15,7 @@ namespace {
 constexpr int SPAWN_REGION_MOB_COUNT = 5;
 constexpr float MOB_RESPAWN_SECONDS = 6.0f;
 constexpr float MOB_SPAWN_ANIMATION_SECONDS = 0.6f;
-constexpr int MOB_BASE_XP = 20;
-
-struct MobDefinition {
-  MobType type;
-  const char* name;
-  SDL_Color color;
-  int maxHealth;
-  int experience;
-  int attackDamage;
-  float attackCooldown;
-  float attackRange;
-  float speed;
-  float aggroRange;
-  float leashRange;
-};
-
-const std::array<MobDefinition, 3> kGoblinTypes = {{
-    {MobType::Goblin, "Goblin", SDL_Color{40, 200, 80, 255}, 20, MOB_BASE_XP, 5, 1.2f, 36.0f, 60.0f,
-     160.0f, 220.0f},
-    {MobType::GoblinArcher, "Goblin Archer", SDL_Color{60, 160, 220, 255}, 16, 25, 4, 1.0f, 80.0f,
-     70.0f, 180.0f, 240.0f},
-    {MobType::GoblinBrute, "Goblin Brute", SDL_Color{120, 180, 60, 255}, 30, 35, 7, 1.6f, 36.0f,
-     45.0f, 140.0f, 200.0f},
-}};
+constexpr int MOB_LEVEL_CAP = 60;
 
 std::optional<Coordinate> firstWalkableInRegion(const Map& map, const Region& region) {
   for (int y = region.y; y < region.y + region.height; ++y) {
@@ -74,45 +50,53 @@ std::optional<Position> randomSpawnPosition(const Map& map, const Region& region
   return Position(fallback->x * TILE_SIZE, fallback->y * TILE_SIZE);
 }
 
-const MobDefinition& pickMobDefinition(std::mt19937& rng) {
-  std::uniform_int_distribution<std::size_t> dist(0, kGoblinTypes.size() - 1);
-  return kGoblinTypes[dist(rng)];
+int spawnLevelForRegion(const Region& region) {
+  if (region.type != RegionType::SpawnRegion) {
+    return 1;
+  }
+  const int levelBand = std::max(0, (region.x + region.y) / 64);
+  const int computed = 1 + (levelBand * 5);
+  return std::clamp(computed, 1, MOB_LEVEL_CAP);
 }
 
 int spawnMob(Registry& registry, const Position& position, const Region& region,
-             std::vector<int>& mobEntityIds, const MobDefinition& definition) {
+             std::vector<int>& mobEntityIds, const MobDatabase& mobDatabase,
+             const MobArchetype& archetype, int mobLevel) {
+  const MobResolvedStats resolved = mobDatabase.resolveStats(archetype.type, mobLevel);
   int mobEntityId = registry.createEntity();
   registry.registerComponentForEntity<TransformComponent>(
       std::make_unique<TransformComponent>(position), mobEntityId);
   registry.registerComponentForEntity<GraphicComponent>(
-      std::make_unique<GraphicComponent>(position, definition.color), mobEntityId);
+      std::make_unique<GraphicComponent>(position, resolved.color), mobEntityId);
   registry.registerComponentForEntity<CollisionComponent>(
       std::make_unique<CollisionComponent>(32.0f, 32.0f, false), mobEntityId);
   registry.registerComponentForEntity<PushbackComponent>(
       std::make_unique<PushbackComponent>(0.0f, 0.0f, 0.0f), mobEntityId);
   registry.registerComponentForEntity<HealthComponent>(
-      std::make_unique<HealthComponent>(definition.maxHealth, definition.maxHealth), mobEntityId);
+      std::make_unique<HealthComponent>(resolved.maxHealth, resolved.maxHealth), mobEntityId);
   const int tileX = static_cast<int>(position.x / TILE_SIZE);
   const int tileY = static_cast<int>(position.y / TILE_SIZE);
   registry.registerComponentForEntity<MobComponent>(
-      std::make_unique<MobComponent>(
-          definition.type, 1, tileX, tileY, region.x, region.y, region.width, region.height,
-          definition.aggroRange, definition.leashRange, definition.speed, definition.experience,
-          definition.attackDamage, definition.attackCooldown, definition.attackRange),
+      std::make_unique<MobComponent>(archetype.type, resolved.level, tileX, tileY, region.x,
+                                     region.y, region.width, region.height, resolved.aggroRange,
+                                     resolved.leashRange, resolved.speed, resolved.experience,
+                                     resolved.attackDamage, resolved.attackCooldown,
+                                     resolved.attackRange),
       mobEntityId);
   mobEntityIds.push_back(mobEntityId);
   return mobEntityId;
 }
 
 void resetMob(Registry& registry, int entityId, const Position& position, const Region& region,
-              const MobDefinition& definition) {
+              const MobDatabase& mobDatabase, const MobArchetype& archetype, int mobLevel) {
+  const MobResolvedStats resolved = mobDatabase.resolveStats(archetype.type, mobLevel);
   TransformComponent& transform = registry.getComponent<TransformComponent>(entityId);
   GraphicComponent& graphic = registry.getComponent<GraphicComponent>(entityId);
   HealthComponent& health = registry.getComponent<HealthComponent>(entityId);
   MobComponent& mob = registry.getComponent<MobComponent>(entityId);
 
   transform.position = position;
-  graphic.color = definition.color;
+  graphic.color = resolved.color;
   const int tileX = static_cast<int>(position.x / TILE_SIZE);
   const int tileY = static_cast<int>(position.y / TILE_SIZE);
   mob.homeX = tileX;
@@ -121,21 +105,23 @@ void resetMob(Registry& registry, int entityId, const Position& position, const 
   mob.regionY = region.y;
   mob.regionWidth = region.width;
   mob.regionHeight = region.height;
-  mob.type = definition.type;
-  mob.aggroRange = definition.aggroRange;
-  mob.leashRange = definition.leashRange;
-  mob.speed = definition.speed;
-  mob.experience = definition.experience;
-  mob.attackDamage = definition.attackDamage;
-  mob.attackCooldown = definition.attackCooldown;
-  mob.attackRange = definition.attackRange;
+  mob.type = archetype.type;
+  mob.level = resolved.level;
+  mob.aggroRange = resolved.aggroRange;
+  mob.leashRange = resolved.leashRange;
+  mob.speed = resolved.speed;
+  mob.experience = resolved.experience;
+  mob.attackDamage = resolved.attackDamage;
+  mob.attackCooldown = resolved.attackCooldown;
+  mob.attackRange = resolved.attackRange;
   mob.attackTimer = 0.0f;
-  health.max = definition.maxHealth;
-  health.current = definition.maxHealth;
+  health.max = resolved.maxHealth;
+  health.current = resolved.maxHealth;
 }
 } // namespace
 
-RespawnSystem::RespawnSystem() : rng(std::random_device{}()) {}
+RespawnSystem::RespawnSystem(const MobDatabase& mobDatabase, unsigned int seed)
+    : mobDatabase(mobDatabase), rng(seed) {}
 
 void RespawnSystem::beginSpawnAnimation(int entityId, GraphicComponent& graphic, float duration) {
   SpawnAnimation animation;
@@ -154,7 +140,8 @@ void RespawnSystem::initialize(const Map& map, Registry& registry, std::vector<i
     if (region.type != RegionType::SpawnRegion) {
       continue;
     }
-    SpawnRegionState state{region, std::vector<SpawnSlot>(SPAWN_REGION_MOB_COUNT)};
+    SpawnRegionState state{region, spawnLevelForRegion(region),
+                           std::vector<SpawnSlot>(SPAWN_REGION_MOB_COUNT)};
     for (SpawnSlot& slot : state.slots) {
       std::optional<Position> spawnPosition = randomSpawnPosition(map, region, rng);
       if (!spawnPosition.has_value()) {
@@ -162,8 +149,9 @@ void RespawnSystem::initialize(const Map& map, Registry& registry, std::vector<i
         slot.respawnTimer = MOB_RESPAWN_SECONDS;
         continue;
       }
-      const MobDefinition& definition = pickMobDefinition(rng);
-      slot.entityId = spawnMob(registry, *spawnPosition, region, mobEntityIds, definition);
+      const MobArchetype& archetype = this->mobDatabase.randomArchetype(rng);
+      slot.entityId = spawnMob(registry, *spawnPosition, region, mobEntityIds, this->mobDatabase,
+                               archetype, state.mobLevel);
       slot.respawnTimer = 0.0f;
       GraphicComponent& graphic = registry.getComponent<GraphicComponent>(slot.entityId);
       beginSpawnAnimation(slot.entityId, graphic, MOB_SPAWN_ANIMATION_SECONDS);
@@ -203,12 +191,13 @@ void RespawnSystem::update(float dt, const Map& map, Registry& registry,
             continue;
           }
           if (slot.entityId < 0) {
-            const MobDefinition& definition = pickMobDefinition(rng);
-            slot.entityId =
-                spawnMob(registry, *spawnPosition, spawnRegion.region, mobEntityIds, definition);
+            const MobArchetype& archetype = this->mobDatabase.randomArchetype(rng);
+            slot.entityId = spawnMob(registry, *spawnPosition, spawnRegion.region, mobEntityIds,
+                                     this->mobDatabase, archetype, spawnRegion.mobLevel);
           } else {
-            const MobDefinition& definition = pickMobDefinition(rng);
-            resetMob(registry, slot.entityId, *spawnPosition, spawnRegion.region, definition);
+            const MobArchetype& archetype = this->mobDatabase.randomArchetype(rng);
+            resetMob(registry, slot.entityId, *spawnPosition, spawnRegion.region, this->mobDatabase,
+                     archetype, spawnRegion.mobLevel);
           }
           GraphicComponent& graphic = registry.getComponent<GraphicComponent>(slot.entityId);
           beginSpawnAnimation(slot.entityId, graphic, MOB_SPAWN_ANIMATION_SECONDS);
