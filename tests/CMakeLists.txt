@@ -15,3 +15,9 @@ target_link_libraries(character_stats_input_test PRIVATE ui SDL3::SDL3 SDL3_ttf:
 target_include_directories(character_stats_input_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME character_stats_input_test COMMAND character_stats_input_test)
+
+add_executable(item_database_generation_test item_database_generation_test.cc)
+target_link_libraries(item_database_generation_test PRIVATE items)
+target_include_directories(item_database_generation_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_test(NAME item_database_generation_test COMMAND item_database_generation_test)

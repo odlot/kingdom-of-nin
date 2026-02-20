@@ -123,7 +123,7 @@ void CharacterStats::render(SDL_Renderer* renderer, TTF_Font* font, int windowWi
       "Level: " + std::to_string(level.level),
       "HP: " + std::to_string(health.current) + "/" + std::to_string(health.max),
       "MP: " + std::to_string(mana.current) + "/" + std::to_string(mana.max),
-      "AP: " + std::to_string(attackPower),
+      std::string(className == "Mage" ? "SP: " : "AP: ") + std::to_string(attackPower),
       "Gold: " + std::to_string(gold),
       "XP: " + std::to_string(level.experience) + "/" + std::to_string(level.nextLevelExperience),
       "Class: " + className,

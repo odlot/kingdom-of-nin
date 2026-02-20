@@ -18,9 +18,22 @@ enum class WeaponType {
   Dagger
 };
 
-struct ItemStats {
-  int attackPower = 0;
+enum class ItemRarity { Common = 0, Rare, Epic };
+
+struct PrimaryStatBonuses {
+  int strength = 0;
+  int dexterity = 0;
+  int intellect = 0;
+  int luck = 0;
+};
+
+struct WeaponEquipmentStats {
+  PrimaryStatBonuses primary;
+};
+
+struct ArmorEquipmentStats {
   int armor = 0;
+  PrimaryStatBonuses primary;
 };
 
 struct ProjectileStats {
@@ -33,10 +46,12 @@ struct ItemDef {
   int id = 0;
   std::string name;
   ItemSlot slot = ItemSlot::Weapon;
+  ItemRarity rarity = ItemRarity::Common;
   int requiredLevel = 1;
   std::unordered_set<CharacterClass> allowedClasses;
   WeaponType weaponType = WeaponType::None;
-  ItemStats stats;
+  WeaponEquipmentStats weaponStats;
+  ArmorEquipmentStats armorStats;
   ProjectileStats projectile;
   int price = 0;
 };
@@ -44,6 +59,38 @@ struct ItemDef {
 struct ItemInstance {
   int itemId = 0;
 };
+
+inline const char* itemRarityName(ItemRarity rarity) {
+  switch (rarity) {
+  case ItemRarity::Common:
+    return "Common";
+  case ItemRarity::Rare:
+    return "Rare";
+  case ItemRarity::Epic:
+    return "Epic";
+  }
+  return "Unknown";
+}
+
+inline bool isWeaponSlot(ItemSlot slot) {
+  return slot == ItemSlot::Weapon;
+}
+
+inline bool isWeaponItem(const ItemDef& def) {
+  return isWeaponSlot(def.slot);
+}
+
+inline const PrimaryStatBonuses& primaryStatsForItem(const ItemDef& def) {
+  return isWeaponItem(def) ? def.weaponStats.primary : def.armorStats.primary;
+}
+
+inline PrimaryStatBonuses& primaryStatsForItem(ItemDef& def) {
+  return isWeaponItem(def) ? def.weaponStats.primary : def.armorStats.primary;
+}
+
+inline int armorForItem(const ItemDef& def) {
+  return isWeaponItem(def) ? 0 : def.armorStats.armor;
+}
 
 inline bool canEquipForClass(const ItemDef& def, CharacterClass characterClass) {
   if (def.allowedClasses.empty()) {

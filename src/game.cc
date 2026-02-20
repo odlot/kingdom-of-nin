@@ -60,6 +60,7 @@ constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
 constexpr float AUTO_TARGET_RANGE_MULTIPLIER = 2.0f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
 constexpr float NPC_INTERACT_RANGE = 52.0f;
+constexpr int PLAYER_LEVEL_CAP = 60;
 constexpr float FACING_TURN_SPEED = 8.0f;
 constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
 constexpr float PUSHBACK_DURATION = 0.2f;
@@ -154,17 +155,13 @@ SDL_Color lootColorForItem(const ItemDef* def) {
   if (!def) {
     return SDL_Color{200, 200, 200, 255};
   }
-  switch (def->slot) {
-  case ItemSlot::Weapon:
-    return SDL_Color{240, 200, 80, 255};
-  case ItemSlot::Shield:
-    return SDL_Color{120, 180, 240, 255};
-  case ItemSlot::Shoulders:
-  case ItemSlot::Chest:
-  case ItemSlot::Pants:
-  case ItemSlot::Boots:
-  case ItemSlot::Cape:
-    return SDL_Color{120, 220, 140, 255};
+  switch (def->rarity) {
+  case ItemRarity::Common:
+    return SDL_Color{210, 210, 210, 255};
+  case ItemRarity::Rare:
+    return SDL_Color{100, 160, 255, 255};
+  case ItemRarity::Epic:
+    return SDL_Color{200, 120, 255, 255};
   }
   return SDL_Color{200, 200, 200, 255};
 }
@@ -275,16 +272,41 @@ Game::InputState Game::captureInput() {
 }
 
 int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& equipment,
-                       const ItemDatabase& database) {
-  int total = stats.baseAttackPower + stats.strength;
+                       const ItemDatabase& database, CharacterClass characterClass) {
+  int strength = stats.strength;
+  int dexterity = stats.dexterity;
+  int intellect = stats.intellect;
+  int luck = stats.luck;
   for (const auto& entry : equipment.equipped) {
     const ItemDef* def = database.getItem(entry.second.itemId);
     if (!def) {
       continue;
     }
-    total += def->stats.attackPower;
+    const PrimaryStatBonuses& primary = primaryStatsForItem(*def);
+    strength += primary.strength;
+    dexterity += primary.dexterity;
+    intellect += primary.intellect;
+    luck += primary.luck;
   }
-  return total;
+  int primaryStat = strength;
+  switch (characterClass) {
+  case CharacterClass::Warrior:
+    primaryStat = strength;
+    break;
+  case CharacterClass::Archer:
+    primaryStat = dexterity;
+    break;
+  case CharacterClass::Mage:
+    primaryStat = intellect;
+    break;
+  case CharacterClass::Rogue:
+    primaryStat = luck;
+    break;
+  case CharacterClass::Any:
+    primaryStat = std::max({strength, dexterity, intellect, luck});
+    break;
+  }
+  return stats.baseAttackPower + primaryStat;
 }
 
 int computeArmor(const StatsComponent& stats, const EquipmentComponent& equipment,
@@ -295,22 +317,48 @@ int computeArmor(const StatsComponent& stats, const EquipmentComponent& equipmen
     if (!def) {
       continue;
     }
-    total += def->stats.armor;
+    total += armorForItem(*def);
   }
   return total;
 }
 
-void refreshSecondaryStats(StatsComponent& stats) {
-  stats.critChanceBonus = std::clamp(0.0025f * static_cast<float>(stats.luck), 0.0f, 0.35f);
-  stats.critDamageBonus = std::clamp(0.01f * static_cast<float>(stats.luck), 0.0f, 1.2f);
-  stats.accuracy = std::clamp(0.72f + (0.012f * static_cast<float>(stats.dexterity)) +
-                                  (0.0015f * static_cast<float>(stats.luck)),
+struct EffectivePrimaryStats {
+  int strength = 0;
+  int dexterity = 0;
+  int intellect = 0;
+  int luck = 0;
+};
+
+EffectivePrimaryStats computeEffectivePrimaryStats(const StatsComponent& stats,
+                                                   const EquipmentComponent& equipment,
+                                                   const ItemDatabase& database) {
+  EffectivePrimaryStats effective{stats.strength, stats.dexterity, stats.intellect, stats.luck};
+  for (const auto& entry : equipment.equipped) {
+    const ItemDef* def = database.getItem(entry.second.itemId);
+    if (!def) {
+      continue;
+    }
+    const PrimaryStatBonuses& primary = primaryStatsForItem(*def);
+    effective.strength += primary.strength;
+    effective.dexterity += primary.dexterity;
+    effective.intellect += primary.intellect;
+    effective.luck += primary.luck;
+  }
+  return effective;
+}
+
+void refreshSecondaryStats(StatsComponent& stats, const EffectivePrimaryStats& effectiveStats) {
+  stats.critChanceBonus =
+      std::clamp(0.0025f * static_cast<float>(effectiveStats.luck), 0.0f, 0.35f);
+  stats.critDamageBonus = std::clamp(0.01f * static_cast<float>(effectiveStats.luck), 0.0f, 1.2f);
+  stats.accuracy = std::clamp(0.72f + (0.012f * static_cast<float>(effectiveStats.dexterity)) +
+                                  (0.0015f * static_cast<float>(effectiveStats.luck)),
                               0.72f, 0.99f);
-  stats.dodge = std::clamp((0.0025f * static_cast<float>(stats.dexterity)) +
-                               (0.001f * static_cast<float>(stats.luck)),
+  stats.dodge = std::clamp((0.0025f * static_cast<float>(effectiveStats.dexterity)) +
+                               (0.001f * static_cast<float>(effectiveStats.luck)),
                            0.0f, 0.35f);
-  stats.parry = std::clamp((0.0015f * static_cast<float>(stats.strength)) +
-                               (0.001f * static_cast<float>(stats.dexterity)),
+  stats.parry = std::clamp((0.0015f * static_cast<float>(effectiveStats.strength)) +
+                               (0.001f * static_cast<float>(effectiveStats.dexterity)),
                            0.0f, 0.25f);
 }
 
@@ -501,12 +549,17 @@ ClassDefaults classDefaultsFor(CharacterClass characterClass) {
 }
 
 void applyLevelUps(LevelComponent& level, StatsComponent& stats, SkillTreeComponent& skillTree) {
-  while (level.experience >= level.nextLevelExperience) {
+  while (level.level < PLAYER_LEVEL_CAP && level.experience >= level.nextLevelExperience) {
     level.experience -= level.nextLevelExperience;
     level.level += 1;
     level.nextLevelExperience += 100;
     stats.unspentPoints += 5;
     skillTree.unspentPoints += 1;
+  }
+  if (level.level >= PLAYER_LEVEL_CAP) {
+    level.level = PLAYER_LEVEL_CAP;
+    level.experience = 0;
+    level.nextLevelExperience = 0;
   }
 }
 
@@ -547,6 +600,8 @@ Position centerForEntity(const TransformComponent& transform, const CollisionCom
 
 void applyPushback(Registry& registry, int targetEntityId, const Position& fromPosition,
                    float distance, float duration);
+bool createLootEntity(Registry& registry, const ItemDatabase& database, const Position& position,
+                      int itemId, std::vector<int>& lootEntityIds);
 int createProjectileEntity(Registry& registry, const Position& position, float velocityX,
                            float velocityY, float range, int sourceEntityId, int targetEntityId,
                            int damage, bool isCrit, float radius, float trailLength,
@@ -758,11 +813,20 @@ void Game::updatePlayerAttack(float dt) {
                           isCrit ? FloatingTextKind::CritDamage : FloatingTextKind::Damage});
     if (mobHealth.current == 0) {
       LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
+      const ClassComponent& playerClass =
+          this->registry->getComponent<ClassComponent>(this->playerEntityId);
       const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
       this->eventBus->emitMobKilledEvent(MobKilledEvent{mob.type, mobEntityId});
       level.experience += mob.experience;
       this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
           "XP +" + std::to_string(mob.experience), hitPosition, FloatingTextKind::Info});
+      const int dropLevel = std::clamp(level.level, 1, PLAYER_LEVEL_CAP);
+      const int droppedItemId = this->itemDatabase->generateEquipmentDrop(
+          dropLevel, playerClass.characterClass, this->rng);
+      const TransformComponent& mobTransform =
+          this->registry->getComponent<TransformComponent>(mobEntityId);
+      createLootEntity(*this->registry, *this->itemDatabase, mobTransform.position, droppedItemId,
+                       this->lootEntityIds);
       GraphicComponent& mobGraphic = this->registry->getComponent<GraphicComponent>(mobEntityId);
       mobGraphic.color = SDL_Color({80, 80, 80, 255});
     }
@@ -787,7 +851,10 @@ void Game::updatePlayerAttack(float dt) {
   const StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
   const EquipmentComponent& equipment =
       this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-  const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
+  const ClassComponent& playerClass =
+      this->registry->getComponent<ClassComponent>(this->playerEntityId);
+  const int attackPower =
+      computeAttackPower(stats, equipment, *this->itemDatabase, playerClass.characterClass);
   const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
   std::uniform_real_distribution<float> chanceRoll(0.0f, 1.0f);
 
@@ -1003,7 +1070,9 @@ void Game::updateRegionAndQuestState() {
   SkillTreeComponent& skillTree =
       this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
   applyLevelUps(level, stats, skillTree);
-  refreshSecondaryStats(stats);
+  const EquipmentComponent& equipment =
+      this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+  refreshSecondaryStats(stats, computeEffectivePrimaryStats(stats, equipment, *this->itemDatabase));
 }
 
 void Game::applyClassSelection(CharacterClass selectedClass) {
@@ -1028,7 +1097,6 @@ void Game::applyClassSelection(CharacterClass selectedClass) {
   stats.dexterity = std::max(stats.dexterity, defaults.dexterity);
   stats.intellect = std::max(stats.intellect, defaults.intellect);
   stats.luck = std::max(stats.luck, defaults.luck);
-  refreshSecondaryStats(stats);
   health.max = std::max(health.max, defaults.health);
   health.current = health.max;
   mana.max = std::max(mana.max, defaults.mana);
@@ -1047,6 +1115,7 @@ void Game::applyClassSelection(CharacterClass selectedClass) {
   };
   grantAndAutoEquip(defaults.weaponId);
   grantAndAutoEquip(defaults.offhandId);
+  refreshSecondaryStats(stats, computeEffectivePrimaryStats(stats, equipment, *this->itemDatabase));
 
   this->eventBus->emitFloatingTextEvent(
       FloatingTextEvent{"Class selected: " + std::string(className(selectedClass)),
@@ -1482,7 +1551,6 @@ Game::Game() {
     stats.dexterity = defaults.dexterity;
     stats.intellect = defaults.intellect;
     stats.luck = defaults.luck;
-    refreshSecondaryStats(stats);
     health.max = defaults.health;
     health.current = defaults.health;
     mana.max = defaults.mana;
@@ -1501,6 +1569,8 @@ Game::Game() {
                          playerClass.characterClass);
       }
     }
+    refreshSecondaryStats(stats,
+                          computeEffectivePrimaryStats(stats, equipment, *this->itemDatabase));
   }
 
   { // Assign starter skills to the player
@@ -2053,12 +2123,20 @@ void Game::render() {
     std::ostringstream hud;
     const StatsComponent& stats =
         this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    const ClassComponent& playerClass =
+        this->registry->getComponent<ClassComponent>(this->playerEntityId);
     const EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
+    int attackPower =
+        computeAttackPower(stats, equipment, *this->itemDatabase, playerClass.characterClass);
+    const char* powerLabel = (playerClass.characterClass == CharacterClass::Mage) ? "SP" : "AP";
     hud << "HP " << health.current << "/" << health.max << "  MP " << mana.current << "/"
-        << mana.max << "  AP " << attackPower << "  LV " << level.level << " XP "
-        << level.experience << "/" << level.nextLevelExperience;
+        << mana.max << "  " << powerLabel << " " << attackPower << "  LV " << level.level;
+    if (level.level >= PLAYER_LEVEL_CAP) {
+      hud << " (MAX)";
+    } else {
+      hud << " XP " << level.experience << "/" << level.nextLevelExperience;
+    }
     std::string debugText = hud.str();
     SDL_Color textColor = {255, 255, 255, 255};
     SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
@@ -2204,11 +2282,15 @@ void Game::render() {
         this->registry->getComponent<ClassComponent>(this->playerEntityId);
     const EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
-    const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
+    const EffectivePrimaryStats effectiveStats =
+        computeEffectivePrimaryStats(stats, equipment, *this->itemDatabase);
+    const int attackPower =
+        computeAttackPower(stats, equipment, *this->itemDatabase, playerClass.characterClass);
     this->characterStats->render(this->renderer, this->font, WINDOW_WIDTH, health, mana, level,
-                                 attackPower, className(playerClass.characterClass), stats.strength,
-                                 stats.gold, stats.dexterity, stats.intellect, stats.luck,
-                                 stats.unspentPoints, this->inventoryUi->isStatsVisible());
+                                 attackPower, className(playerClass.characterClass),
+                                 effectiveStats.strength, stats.gold, effectiveStats.dexterity,
+                                 effectiveStats.intellect, effectiveStats.luck, stats.unspentPoints,
+                                 this->inventoryUi->isStatsVisible());
   }
 
   { // Quest log overlay

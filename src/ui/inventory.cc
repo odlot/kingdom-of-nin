@@ -1,7 +1,8 @@
 #include "ui/inventory.h"
 
-#include <array>
 #include <cstring>
+#include <string>
+#include <vector>
 
 namespace {
 constexpr float LINE_HEIGHT = 16.0f;
@@ -35,6 +36,90 @@ const char* itemSlotName(ItemSlot slot) {
     return "Cape";
   }
   return "Unknown";
+}
+
+const char* className(CharacterClass characterClass) {
+  switch (characterClass) {
+  case CharacterClass::Warrior:
+    return "Warrior";
+  case CharacterClass::Mage:
+    return "Mage";
+  case CharacterClass::Archer:
+    return "Archer";
+  case CharacterClass::Rogue:
+    return "Rogue";
+  case CharacterClass::Any:
+    break;
+  }
+  return "Any";
+}
+
+std::string allowedClassesLabel(const ItemDef& def) {
+  if (def.allowedClasses.empty() || def.allowedClasses.count(CharacterClass::Any) > 0) {
+    return "All";
+  }
+  std::string label;
+  for (CharacterClass entry : def.allowedClasses) {
+    if (!label.empty()) {
+      label += "/";
+    }
+    label += className(entry);
+  }
+  return label.empty() ? "All" : label;
+}
+
+std::vector<std::string> buildTooltipLines(const ItemDef& def) {
+  std::vector<std::string> lines;
+  const PrimaryStatBonuses& primary = primaryStatsForItem(def);
+  lines.push_back(def.name);
+  lines.push_back(std::string("Rarity: ") + itemRarityName(def.rarity));
+  lines.push_back(std::string("Req L") + std::to_string(def.requiredLevel) + "  " +
+                  allowedClassesLabel(def));
+  lines.push_back(std::string("Slot: ") + itemSlotName(def.slot));
+  lines.push_back("Armor +" + std::to_string(armorForItem(def)));
+  if (primary.strength > 0) {
+    lines.push_back("STR +" + std::to_string(primary.strength));
+  }
+  if (primary.dexterity > 0) {
+    lines.push_back("DEX +" + std::to_string(primary.dexterity));
+  }
+  if (primary.intellect > 0) {
+    lines.push_back("INT +" + std::to_string(primary.intellect));
+  }
+  if (primary.luck > 0) {
+    lines.push_back("LUK +" + std::to_string(primary.luck));
+  }
+  return lines;
+}
+
+void renderTooltip(SDL_Renderer* renderer, TTF_Font* font, const std::vector<std::string>& lines,
+                   float tooltipX, float tooltipY) {
+  if (lines.empty()) {
+    return;
+  }
+  SDL_Color textColor = {255, 255, 255, 255};
+  const float tooltipW = 220.0f;
+  const float tooltipH = 8.0f + (static_cast<float>(lines.size()) * LINE_HEIGHT) + 6.0f;
+
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer, 10, 10, 10, 220);
+  SDL_FRect tooltip = {tooltipX, tooltipY, tooltipW, tooltipH};
+  SDL_RenderFillRect(renderer, &tooltip);
+  SDL_SetRenderDrawColor(renderer, 255, 255, 255, 120);
+  SDL_RenderRect(renderer, &tooltip);
+
+  float textY = tooltipY + 6.0f;
+  for (const std::string& line : lines) {
+    SDL_Surface* surface =
+        TTF_RenderText_Solid(font, line.c_str(), static_cast<int>(line.size()), textColor);
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_FRect textRect = {tooltipX + 6.0f, textY, static_cast<float>(surface->w),
+                          static_cast<float>(surface->h)};
+    SDL_RenderTexture(renderer, texture, nullptr, &textRect);
+    SDL_DestroySurface(surface);
+    SDL_DestroyTexture(texture);
+    textY += LINE_HEIGHT;
+  }
 }
 
 bool pointInRect(int x, int y, const SDL_FRect& rect) {
@@ -294,37 +379,9 @@ void Inventory::render(SDL_Renderer* renderer, TTF_Font* font, const InventoryCo
   if (hoverIndex.has_value() && *hoverIndex < inventory.items.size()) {
     const ItemDef* def = database.getItem(inventory.items[*hoverIndex].itemId);
     if (def) {
-      std::string line1 = def->name;
-      std::string line2 = std::string("Slot: ") + itemSlotName(def->slot);
-      std::string line3 = "AP +" + std::to_string(def->stats.attackPower);
-      std::string line4 = "Armor +" + std::to_string(def->stats.armor);
-
-      SDL_Color textColor = {255, 255, 255, 255};
       const float tooltipX = grid.x + grid.w + 12.0f;
       const float tooltipY = grid.y;
-      const float tooltipW = 180.0f;
-      const float tooltipH = 72.0f;
-
-      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(renderer, 10, 10, 10, 220);
-      SDL_FRect tooltip = {tooltipX, tooltipY, tooltipW, tooltipH};
-      SDL_RenderFillRect(renderer, &tooltip);
-      SDL_SetRenderDrawColor(renderer, 255, 255, 255, 120);
-      SDL_RenderRect(renderer, &tooltip);
-
-      const std::array<std::string, 4> lines = {line1, line2, line3, line4};
-      float textY = tooltipY + 6.0f;
-      for (const std::string& line : lines) {
-        SDL_Surface* surface =
-            TTF_RenderText_Solid(font, line.c_str(), static_cast<int>(line.size()), textColor);
-        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-        SDL_FRect textRect = {tooltipX + 6.0f, textY, static_cast<float>(surface->w),
-                              static_cast<float>(surface->h)};
-        SDL_RenderTexture(renderer, texture, nullptr, &textRect);
-        SDL_DestroySurface(surface);
-        SDL_DestroyTexture(texture);
-        textY += LINE_HEIGHT;
-      }
+      renderTooltip(renderer, font, buildTooltipLines(*def), tooltipX, tooltipY);
     }
   }
 
@@ -333,37 +390,9 @@ void Inventory::render(SDL_Renderer* renderer, TTF_Font* font, const InventoryCo
     if (it != equipment.equipped.end()) {
       const ItemDef* def = database.getItem(it->second.itemId);
       if (def) {
-        std::string line1 = def->name;
-        std::string line2 = std::string("Slot: ") + itemSlotName(def->slot);
-        std::string line3 = "AP +" + std::to_string(def->stats.attackPower);
-        std::string line4 = "Armor +" + std::to_string(def->stats.armor);
-
-        SDL_Color textColor = {255, 255, 255, 255};
         const float tooltipX = equipGrid.x + equipGrid.w + 12.0f;
         const float tooltipY = equipGrid.y + 84.0f;
-        const float tooltipW = 180.0f;
-        const float tooltipH = 72.0f;
-
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 10, 10, 10, 220);
-        SDL_FRect tooltip = {tooltipX, tooltipY, tooltipW, tooltipH};
-        SDL_RenderFillRect(renderer, &tooltip);
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 120);
-        SDL_RenderRect(renderer, &tooltip);
-
-        const std::array<std::string, 4> lines = {line1, line2, line3, line4};
-        float textY = tooltipY + 6.0f;
-        for (const std::string& line : lines) {
-          SDL_Surface* surface =
-              TTF_RenderText_Solid(font, line.c_str(), static_cast<int>(line.size()), textColor);
-          SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-          SDL_FRect textRect = {tooltipX + 6.0f, textY, static_cast<float>(surface->w),
-                                static_cast<float>(surface->h)};
-          SDL_RenderTexture(renderer, texture, nullptr, &textRect);
-          SDL_DestroySurface(surface);
-          SDL_DestroyTexture(texture);
-          textY += LINE_HEIGHT;
-        }
+        renderTooltip(renderer, font, buildTooltipLines(*def), tooltipX, tooltipY);
       }
     }
   }
