@@ -18,9 +18,15 @@ enum class WeaponType {
   Dagger
 };
 
+enum class ItemRarity { Common = 0, Rare, Epic };
+
 struct ItemStats {
   int attackPower = 0;
   int armor = 0;
+  int strength = 0;
+  int dexterity = 0;
+  int intellect = 0;
+  int luck = 0;
 };
 
 struct ProjectileStats {
@@ -33,6 +39,7 @@ struct ItemDef {
   int id = 0;
   std::string name;
   ItemSlot slot = ItemSlot::Weapon;
+  ItemRarity rarity = ItemRarity::Common;
   int requiredLevel = 1;
   std::unordered_set<CharacterClass> allowedClasses;
   WeaponType weaponType = WeaponType::None;
@@ -44,6 +51,18 @@ struct ItemDef {
 struct ItemInstance {
   int itemId = 0;
 };
+
+inline const char* itemRarityName(ItemRarity rarity) {
+  switch (rarity) {
+  case ItemRarity::Common:
+    return "Common";
+  case ItemRarity::Rare:
+    return "Rare";
+  case ItemRarity::Epic:
+    return "Epic";
+  }
+  return "Unknown";
+}
 
 inline bool canEquipForClass(const ItemDef& def, CharacterClass characterClass) {
   if (def.allowedClasses.empty()) {
