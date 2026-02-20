@@ -26,8 +26,8 @@ int main() {
       expect(def->requiredLevel == 60, "generated level is clamped to level cap");
       expect(def->allowedClasses.count(CharacterClass::Warrior) > 0,
              "generated item is usable by preferred class");
-      expect(def->stats.attackPower > 0 || def->stats.armor > 0,
-             "generated item has core combat stats");
+      expect(def->stats.armor > 0 || def->slot == ItemSlot::Weapon,
+             "generated item has armor when applicable");
       expect(def->stats.strength + def->stats.dexterity + def->stats.intellect + def->stats.luck >
                  0,
              "generated item has at least one primary stat bonus");

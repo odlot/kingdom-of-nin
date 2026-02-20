@@ -209,7 +209,7 @@ ItemDatabase::ItemDatabase() {
   basicSword.requiredLevel = 1;
   basicSword.allowedClasses = {CharacterClass::Any};
   basicSword.weaponType = WeaponType::OneHandedSword;
-  basicSword.stats.attackPower = 5;
+  basicSword.stats.strength = 2;
   basicSword.price = 20;
   addItem(basicSword);
 
@@ -220,7 +220,7 @@ ItemDatabase::ItemDatabase() {
   basicSpear.requiredLevel = 1;
   basicSpear.allowedClasses = {CharacterClass::Any};
   basicSpear.weaponType = WeaponType::Spear;
-  basicSpear.stats.attackPower = 6;
+  basicSpear.stats.strength = 3;
   basicSpear.price = 24;
   addItem(basicSpear);
 
@@ -231,7 +231,7 @@ ItemDatabase::ItemDatabase() {
   basicBow.requiredLevel = 1;
   basicBow.allowedClasses = {CharacterClass::Archer};
   basicBow.weaponType = WeaponType::Bow;
-  basicBow.stats.attackPower = 5;
+  basicBow.stats.dexterity = 2;
   basicBow.projectile.speed = 220.0f;
   basicBow.projectile.radius = 9.0f;
   basicBow.projectile.trailLength = 22.0f;
@@ -245,7 +245,7 @@ ItemDatabase::ItemDatabase() {
   basicWand.requiredLevel = 1;
   basicWand.allowedClasses = {CharacterClass::Mage};
   basicWand.weaponType = WeaponType::Wand;
-  basicWand.stats.attackPower = 4;
+  basicWand.stats.intellect = 2;
   basicWand.projectile.speed = 200.0f;
   basicWand.projectile.radius = 10.0f;
   basicWand.projectile.trailLength = 26.0f;
@@ -259,7 +259,7 @@ ItemDatabase::ItemDatabase() {
   basicDagger.requiredLevel = 1;
   basicDagger.allowedClasses = {CharacterClass::Rogue};
   basicDagger.weaponType = WeaponType::Dagger;
-  basicDagger.stats.attackPower = 4;
+  basicDagger.stats.luck = 2;
   basicDagger.price = 18;
   addItem(basicDagger);
 
@@ -327,9 +327,6 @@ int ItemDatabase::generateEquipmentDrop(int targetLevel, CharacterClass preferre
   const int flatBonus = rarityFlatBonus(rarity, level);
   if (slot == ItemSlot::Weapon) {
     generated.weaponType = weaponTypeForClass(preferredClass, rng);
-    const float baseAp = 4.0f + (static_cast<float>(level) * 1.9f);
-    generated.stats.attackPower =
-        std::max(1, static_cast<int>(std::round(baseAp * multiplier * variance)) + flatBonus);
     applyWeaponProjectileDefaults(generated);
   } else if (slot == ItemSlot::Shield) {
     const float baseArmor = 3.0f + (static_cast<float>(level) * 1.4f);
@@ -365,10 +362,12 @@ int ItemDatabase::generateEquipmentDrop(int targetLevel, CharacterClass preferre
 
   const std::string rarityToken = itemRarityName(rarity);
   const std::string classToken = classLabel(preferredClass);
+  const int primaryTotal = generated.stats.strength + generated.stats.dexterity +
+                           generated.stats.intellect + generated.stats.luck;
   generated.name = std::string(randomPrefix(rarity, rng)) + " " + classToken + " " +
                    slotName(slot) + " (" + rarityToken + " L" + std::to_string(level) + ")";
-  generated.price = std::max(10, (level * 3) + (flatBonus * 5) + (generated.stats.attackPower * 2) +
-                                     (generated.stats.armor * 2) + (primaryBonus * 3));
+  generated.price = std::max(10, (level * 3) + (flatBonus * 5) + (generated.stats.armor * 2) +
+                                     (primaryBonus * 3) + (primaryTotal * 2));
 
   addItem(generated);
   return generated.id;

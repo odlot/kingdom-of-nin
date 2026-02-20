@@ -277,13 +277,11 @@ int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& eq
   int dexterity = stats.dexterity;
   int intellect = stats.intellect;
   int luck = stats.luck;
-  int itemAttackPower = 0;
   for (const auto& entry : equipment.equipped) {
     const ItemDef* def = database.getItem(entry.second.itemId);
     if (!def) {
       continue;
     }
-    itemAttackPower += def->stats.attackPower;
     strength += def->stats.strength;
     dexterity += def->stats.dexterity;
     intellect += def->stats.intellect;
@@ -307,7 +305,7 @@ int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& eq
     primaryStat = std::max({strength, dexterity, intellect, luck});
     break;
   }
-  return stats.baseAttackPower + primaryStat + itemAttackPower;
+  return stats.baseAttackPower + primaryStat;
 }
 
 int computeArmor(const StatsComponent& stats, const EquipmentComponent& equipment,
@@ -2129,8 +2127,9 @@ void Game::render() {
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
     int attackPower =
         computeAttackPower(stats, equipment, *this->itemDatabase, playerClass.characterClass);
+    const char* powerLabel = (playerClass.characterClass == CharacterClass::Mage) ? "SP" : "AP";
     hud << "HP " << health.current << "/" << health.max << "  MP " << mana.current << "/"
-        << mana.max << "  AP " << attackPower << "  LV " << level.level;
+        << mana.max << "  " << powerLabel << " " << attackPower << "  LV " << level.level;
     if (level.level >= PLAYER_LEVEL_CAP) {
       hud << " (MAX)";
     } else {

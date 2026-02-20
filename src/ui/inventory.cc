@@ -75,7 +75,6 @@ std::vector<std::string> buildTooltipLines(const ItemDef& def) {
   lines.push_back(std::string("Req L") + std::to_string(def.requiredLevel) + "  " +
                   allowedClassesLabel(def));
   lines.push_back(std::string("Slot: ") + itemSlotName(def.slot));
-  lines.push_back("AP +" + std::to_string(def.stats.attackPower));
   lines.push_back("Armor +" + std::to_string(def.stats.armor));
   if (def.stats.strength > 0) {
     lines.push_back("STR +" + std::to_string(def.stats.strength));

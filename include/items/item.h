@@ -21,7 +21,6 @@ enum class WeaponType {
 enum class ItemRarity { Common = 0, Rare, Epic };
 
 struct ItemStats {
-  int attackPower = 0;
   int armor = 0;
   int strength = 0;
   int dexterity = 0;
