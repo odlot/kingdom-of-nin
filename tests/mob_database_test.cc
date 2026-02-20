@@ -25,9 +25,13 @@ int main() {
   MobDatabase database;
 
   {
+    expect(database.allArchetypes().size() >= 12, "has expanded archetype roster");
     expect(database.get(MobType::Goblin) != nullptr, "has goblin archetype");
     expect(database.get(MobType::GoblinArcher) != nullptr, "has goblin archer archetype");
     expect(database.get(MobType::GoblinBrute) != nullptr, "has goblin brute archetype");
+    expect(database.get(MobType::Skeleton) != nullptr, "has skeleton archetype");
+    expect(database.get(MobType::BanditArcher) != nullptr, "has bandit archer archetype");
+    expect(database.get(MobType::ArcaneSentinel) != nullptr, "has arcane sentinel archetype");
   }
 
   {

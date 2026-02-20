@@ -1,7 +1,7 @@
 #pragma once
 
-#include <array>
 #include <random>
+#include <vector>
 
 #include "SDL3/SDL.h"
 #include "ecs/component/mob_component.h"
@@ -48,11 +48,12 @@ public:
   MobDatabase();
 
   const MobArchetype* get(MobType type) const;
+  const std::vector<MobArchetype>& allArchetypes() const { return archetypes; }
   const MobArchetype& randomArchetype(std::mt19937& rng) const;
   MobResolvedStats resolveStats(MobType type, int level) const;
   bool rollEquipmentDrop(MobType type, std::mt19937& rng,
                          EquipmentDropGenerationOptions& outOptions) const;
 
 private:
-  std::array<MobArchetype, 3> archetypes;
+  std::vector<MobArchetype> archetypes;
 };

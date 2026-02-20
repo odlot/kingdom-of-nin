@@ -11,7 +11,7 @@ int clampedWeight(int value) {
 } // namespace
 
 MobDatabase::MobDatabase() {
-  this->archetypes = {{
+  this->archetypes = {
       {MobType::Goblin, "Goblin", SDL_Color{40, 200, 80, 255}, 20, 5, 20, 3, 5, 1, 1.2f, 36.0f,
        60.0f, 160.0f, 220.0f, MobLootTable{25, EquipmentDropGenerationOptions{30, 70, 80, 18, 2}}},
       {MobType::GoblinArcher, "Goblin Archer", SDL_Color{60, 160, 220, 255}, 16, 4, 25, 4, 4, 1,
@@ -20,7 +20,38 @@ MobDatabase::MobDatabase() {
       {MobType::GoblinBrute, "Goblin Brute", SDL_Color{120, 180, 60, 255}, 30, 7, 35, 5, 7, 2, 1.6f,
        36.0f, 45.0f, 140.0f, 200.0f,
        MobLootTable{15, EquipmentDropGenerationOptions{50, 50, 55, 33, 12}}},
-  }};
+      {MobType::Skeleton, "Skeleton", SDL_Color{206, 206, 198, 255}, 24, 6, 24, 4, 6, 1, 1.25f,
+       40.0f, 55.0f, 165.0f, 230.0f,
+       MobLootTable{22, EquipmentDropGenerationOptions{35, 65, 72, 24, 4}}},
+      {MobType::SkeletonArcher, "Skeleton Archer", SDL_Color{170, 180, 196, 255}, 20, 5, 27, 4, 5,
+       1, 1.1f, 90.0f, 62.0f, 185.0f, 250.0f,
+       MobLootTable{18, EquipmentDropGenerationOptions{50, 50, 60, 32, 8}}},
+      {MobType::Necromancer, "Necromancer", SDL_Color{125, 110, 180, 255}, 18, 4, 34, 5, 8, 2, 1.8f,
+       100.0f, 52.0f, 190.0f, 260.0f,
+       MobLootTable{14, EquipmentDropGenerationOptions{45, 55, 45, 37, 18}}},
+      {MobType::Wolf, "Wolf", SDL_Color{130, 130, 130, 255}, 18, 5, 22, 3, 5, 1, 1.0f, 32.0f, 85.0f,
+       170.0f, 220.0f, MobLootTable{28, EquipmentDropGenerationOptions{20, 80, 82, 16, 2}}},
+      {MobType::DireWolf, "Dire Wolf", SDL_Color{90, 95, 105, 255}, 28, 6, 30, 4, 7, 2, 1.1f, 34.0f,
+       95.0f, 185.0f, 240.0f, MobLootTable{20, EquipmentDropGenerationOptions{25, 75, 75, 22, 3}}},
+      {MobType::Bandit, "Bandit", SDL_Color{186, 152, 110, 255}, 26, 6, 32, 4, 7, 1, 1.2f, 38.0f,
+       65.0f, 175.0f, 235.0f, MobLootTable{20, EquipmentDropGenerationOptions{40, 60, 70, 25, 5}}},
+      {MobType::BanditArcher, "Bandit Archer", SDL_Color{168, 130, 90, 255}, 22, 5, 34, 4, 6, 1,
+       1.0f, 92.0f, 68.0f, 185.0f, 245.0f,
+       MobLootTable{18, EquipmentDropGenerationOptions{55, 45, 60, 32, 8}}},
+      {MobType::BanditBruiser, "Bandit Bruiser", SDL_Color{148, 110, 86, 255}, 36, 8, 40, 6, 9, 2,
+       1.5f, 36.0f, 58.0f, 170.0f, 230.0f,
+       MobLootTable{12, EquipmentDropGenerationOptions{45, 55, 50, 35, 15}}},
+      {MobType::Slime, "Slime", SDL_Color{96, 212, 186, 255}, 34, 9, 38, 6, 8, 2, 1.7f, 34.0f,
+       40.0f, 135.0f, 190.0f, MobLootTable{35, EquipmentDropGenerationOptions{10, 90, 88, 11, 1}}},
+      {MobType::ArcaneWisp, "Arcane Wisp", SDL_Color{130, 182, 255, 255}, 24, 5, 42, 6, 9, 2, 1.3f,
+       96.0f, 78.0f, 200.0f, 260.0f,
+       MobLootTable{24, EquipmentDropGenerationOptions{50, 50, 58, 33, 9}}},
+      {MobType::ArcaneSentinel, "Arcane Sentinel", SDL_Color{120, 132, 220, 255}, 42, 10, 48, 7, 11,
+       2, 1.7f, 88.0f, 48.0f, 190.0f, 255.0f,
+       MobLootTable{14, EquipmentDropGenerationOptions{40, 60, 48, 35, 17}}},
+      {MobType::Ogre, "Ogre", SDL_Color{90, 170, 120, 255}, 52, 12, 56, 8, 13, 3, 1.9f, 40.0f,
+       42.0f, 165.0f, 220.0f, MobLootTable{10, EquipmentDropGenerationOptions{50, 50, 42, 38, 20}}},
+  };
 }
 
 const MobArchetype* MobDatabase::get(MobType type) const {

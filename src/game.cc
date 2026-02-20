@@ -115,18 +115,6 @@ std::string regionName(RegionType type) {
   return "Region";
 }
 
-const char* mobTypeName(MobType type) {
-  switch (type) {
-  case MobType::Goblin:
-    return "Goblin";
-  case MobType::GoblinArcher:
-    return "Goblin Archer";
-  case MobType::GoblinBrute:
-    return "Goblin Brute";
-  }
-  return "Mob";
-}
-
 const char* className(CharacterClass characterClass) {
   switch (characterClass) {
   case CharacterClass::Warrior:
@@ -396,13 +384,31 @@ float mobEvasionChance(const MobComponent& mob) {
   float base = 0.02f;
   switch (mob.type) {
   case MobType::Goblin:
+  case MobType::Skeleton:
+  case MobType::Bandit:
     base = 0.03f;
     break;
   case MobType::GoblinArcher:
+  case MobType::SkeletonArcher:
+  case MobType::BanditArcher:
+  case MobType::ArcaneWisp:
     base = 0.06f;
     break;
   case MobType::GoblinBrute:
+  case MobType::BanditBruiser:
+  case MobType::Ogre:
     base = 0.015f;
+    break;
+  case MobType::Wolf:
+  case MobType::DireWolf:
+    base = 0.05f;
+    break;
+  case MobType::Necromancer:
+  case MobType::ArcaneSentinel:
+    base = 0.04f;
+    break;
+  case MobType::Slime:
+    base = 0.01f;
     break;
   }
   return std::clamp(base + (0.002f * static_cast<float>(mob.level)), 0.01f, 0.25f);
