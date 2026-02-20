@@ -462,13 +462,18 @@ void applyLevelUps(LevelComponent& level, StatsComponent& stats, SkillTreeCompon
 }
 
 bool equipItemByIndex(InventoryComponent& inventory, EquipmentComponent& equipment,
-                      const ItemDatabase& database, std::size_t index) {
+                      const ItemDatabase& database, std::size_t index, int playerLevel,
+                      CharacterClass playerClass) {
   std::optional<ItemInstance> item = inventory.takeItemAt(index);
   if (!item.has_value()) {
     return false;
   }
   const ItemDef* def = database.getItem(item->itemId);
   if (!def) {
+    inventory.addItem(*item);
+    return false;
+  }
+  if (!meetsEquipRequirements(*def, playerLevel, playerClass)) {
     inventory.addItem(*item);
     return false;
   }
@@ -923,6 +928,7 @@ void Game::applyClassSelection(CharacterClass selectedClass) {
   StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
   HealthComponent& health = this->registry->getComponent<HealthComponent>(this->playerEntityId);
   ManaComponent& mana = this->registry->getComponent<ManaComponent>(this->playerEntityId);
+  const LevelComponent& level = this->registry->getComponent<LevelComponent>(this->playerEntityId);
   ClassComponent& playerClass = this->registry->getComponent<ClassComponent>(this->playerEntityId);
   const ClassDefaults defaults = classDefaultsFor(selectedClass);
   playerClass.characterClass = selectedClass;
@@ -945,7 +951,8 @@ void Game::applyClassSelection(CharacterClass selectedClass) {
     if (!inventory.addItem(starter)) {
       return;
     }
-    equipItemByIndex(inventory, equipment, *this->itemDatabase, inventory.items.size() - 1);
+    equipItemByIndex(inventory, equipment, *this->itemDatabase, inventory.items.size() - 1,
+                     level.level, selectedClass);
   };
   grantAndAutoEquip(defaults.weaponId);
   grantAndAutoEquip(defaults.offhandId);
@@ -996,9 +1003,13 @@ void Game::updateUiInput(const InputState& input) {
         this->registry->getComponent<InventoryComponent>(this->playerEntityId);
     EquipmentComponent& equipment =
         this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    const LevelComponent& level =
+        this->registry->getComponent<LevelComponent>(this->playerEntityId);
+    const ClassComponent& characterClass =
+        this->registry->getComponent<ClassComponent>(this->playerEntityId);
     this->inventoryUi->handleInput(input.keyboardState, static_cast<int>(input.mouseX),
                                    static_cast<int>(input.mouseY), input.mousePressed, inventory,
-                                   equipment, *this->itemDatabase);
+                                   equipment, *this->itemDatabase, level, characterClass);
   }
   {
     StatsComponent& stats = this->registry->getComponent<StatsComponent>(this->playerEntityId);
@@ -1387,13 +1398,15 @@ Game::Game() {
     if (defaults.weaponId > 0) {
       ItemInstance weaponInstance{defaults.weaponId};
       if (inventory.addItem(weaponInstance)) {
-        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0, 1,
+                         playerClass.characterClass);
       }
     }
     if (defaults.offhandId > 0) {
       ItemInstance offhandInstance{defaults.offhandId};
       if (inventory.addItem(offhandInstance)) {
-        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0);
+        equipItemByIndex(inventory, equipment, *this->itemDatabase, 0, 1,
+                         playerClass.characterClass);
       }
     }
   }

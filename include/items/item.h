@@ -44,3 +44,20 @@ struct ItemDef {
 struct ItemInstance {
   int itemId = 0;
 };
+
+inline bool canEquipForClass(const ItemDef& def, CharacterClass characterClass) {
+  if (def.allowedClasses.empty()) {
+    return true;
+  }
+  if (def.allowedClasses.count(CharacterClass::Any) > 0) {
+    return true;
+  }
+  return def.allowedClasses.count(characterClass) > 0;
+}
+
+inline bool meetsEquipRequirements(const ItemDef& def, int level, CharacterClass characterClass) {
+  if (level < def.requiredLevel) {
+    return false;
+  }
+  return canEquipForClass(def, characterClass);
+}
