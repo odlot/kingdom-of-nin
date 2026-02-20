@@ -60,8 +60,6 @@ constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
 constexpr float AUTO_TARGET_RANGE_MULTIPLIER = 2.0f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
 constexpr float NPC_INTERACT_RANGE = 52.0f;
-constexpr float PLAYER_CRIT_CHANCE = 0.12f;
-constexpr float PLAYER_CRIT_MULTIPLIER = 1.5f;
 constexpr float FACING_TURN_SPEED = 8.0f;
 constexpr float PUSHBACK_DISTANCE = static_cast<float>(TILE_SIZE);
 constexpr float PUSHBACK_DURATION = 0.2f;
@@ -287,6 +285,57 @@ int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& eq
     total += def->stats.attackPower;
   }
   return total;
+}
+
+int computeArmor(const StatsComponent& stats, const EquipmentComponent& equipment,
+                 const ItemDatabase& database) {
+  int total = stats.baseArmor;
+  for (const auto& entry : equipment.equipped) {
+    const ItemDef* def = database.getItem(entry.second.itemId);
+    if (!def) {
+      continue;
+    }
+    total += def->stats.armor;
+  }
+  return total;
+}
+
+void refreshSecondaryStats(StatsComponent& stats) {
+  stats.critChanceBonus = std::clamp(0.0025f * static_cast<float>(stats.luck), 0.0f, 0.35f);
+  stats.critDamageBonus = std::clamp(0.01f * static_cast<float>(stats.luck), 0.0f, 1.2f);
+  stats.accuracy = std::clamp(0.72f + (0.012f * static_cast<float>(stats.dexterity)) +
+                                  (0.0015f * static_cast<float>(stats.luck)),
+                              0.72f, 0.99f);
+  stats.dodge = std::clamp((0.0025f * static_cast<float>(stats.dexterity)) +
+                               (0.001f * static_cast<float>(stats.luck)),
+                           0.0f, 0.35f);
+  stats.parry = std::clamp((0.0015f * static_cast<float>(stats.strength)) +
+                               (0.001f * static_cast<float>(stats.dexterity)),
+                           0.0f, 0.25f);
+}
+
+float playerCritChance(const StatsComponent& stats) {
+  return std::clamp(0.05f + stats.critChanceBonus, 0.05f, 0.65f);
+}
+
+float playerCritMultiplier(const StatsComponent& stats) {
+  return std::clamp(1.5f + stats.critDamageBonus, 1.25f, 3.0f);
+}
+
+float mobEvasionChance(const MobComponent& mob) {
+  float base = 0.02f;
+  switch (mob.type) {
+  case MobType::Goblin:
+    base = 0.03f;
+    break;
+  case MobType::GoblinArcher:
+    base = 0.06f;
+    break;
+  case MobType::GoblinBrute:
+    base = 0.015f;
+    break;
+  }
+  return std::clamp(base + (0.002f * static_cast<float>(mob.level)), 0.01f, 0.25f);
 }
 
 float squaredDistance(const Position& a, const Position& b) {
@@ -740,13 +789,11 @@ void Game::updatePlayerAttack(float dt) {
       this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
   const int attackPower = computeAttackPower(stats, equipment, *this->itemDatabase);
   const AttackProfile attackProfile = attackProfileForWeapon(equipment, *this->itemDatabase);
-  std::uniform_real_distribution<float> critRoll(0.0f, 1.0f);
-  const bool isCrit = critRoll(this->rng) <= PLAYER_CRIT_CHANCE;
-  const int attackDamage =
-      isCrit ? static_cast<int>(std::round(attackPower * PLAYER_CRIT_MULTIPLIER)) : attackPower;
+  std::uniform_real_distribution<float> chanceRoll(0.0f, 1.0f);
 
   const TransformComponent& mobTransform =
       this->registry->getComponent<TransformComponent>(this->currentAutoTargetId);
+  const MobComponent& mob = this->registry->getComponent<MobComponent>(this->currentAutoTargetId);
   const Position mobCenter(mobTransform.position.x + (TILE_SIZE / 2.0f),
                            mobTransform.position.y + (TILE_SIZE / 2.0f));
   const Position playerCenter = this->playerCenter();
@@ -754,6 +801,17 @@ void Game::updatePlayerAttack(float dt) {
   if (squaredDistance(playerCenter, mobCenter) > rangeSquared) {
     return;
   }
+  const float hitChance = std::clamp(stats.accuracy - mobEvasionChance(mob), 0.2f, 0.99f);
+  if (chanceRoll(this->rng) > hitChance) {
+    this->eventBus->emitFloatingTextEvent(
+        FloatingTextEvent{"Miss", mobCenter, FloatingTextKind::Info});
+    this->attackCooldownRemaining = attackProfile.cooldown;
+    return;
+  }
+  const bool isCrit = chanceRoll(this->rng) <= playerCritChance(stats);
+  const int attackDamage = isCrit ? static_cast<int>(std::round(static_cast<float>(attackPower) *
+                                                                playerCritMultiplier(stats)))
+                                  : attackPower;
 
   if (attackProfile.isRanged) {
     float dx = mobCenter.x - playerCenter.x;
@@ -831,12 +889,43 @@ void Game::updateMobBehavior(float dt) {
       if (playerAlive && squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
         HealthComponent& playerHealth =
             this->registry->getComponent<HealthComponent>(this->playerEntityId);
+        const LevelComponent& playerLevel =
+            this->registry->getComponent<LevelComponent>(this->playerEntityId);
+        const StatsComponent& playerStats =
+            this->registry->getComponent<StatsComponent>(this->playerEntityId);
+        const EquipmentComponent& playerEquipment =
+            this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
         if (playerHealth.current > 0) {
-          playerHealth.current = std::max(0, playerHealth.current - mob.attackDamage);
+          std::uniform_real_distribution<float> chanceRoll(0.0f, 1.0f);
+          const float levelPenalty =
+              std::max(0.0f, static_cast<float>(mob.level - playerLevel.level) * 0.004f);
+          const float parryChance = std::clamp(playerStats.parry - levelPenalty, 0.0f, 0.30f);
+          const float dodgeChance =
+              std::clamp(playerStats.dodge - (levelPenalty * 1.25f), 0.0f, 0.45f);
+          const float avoidRoll = chanceRoll(this->rng);
+          if (avoidRoll <= parryChance) {
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{"Parry", playerCenter, FloatingTextKind::Info});
+            mob.attackTimer = mob.attackCooldown;
+            continue;
+          }
+          if (avoidRoll <= parryChance + dodgeChance) {
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{"Dodge", playerCenter, FloatingTextKind::Info});
+            mob.attackTimer = mob.attackCooldown;
+            continue;
+          }
+
+          const int armor = computeArmor(playerStats, playerEquipment, *this->itemDatabase);
+          const float mitigation = std::clamp(
+              static_cast<float>(armor) / (100.0f + static_cast<float>(armor)), 0.0f, 0.60f);
+          const int damageTaken =
+              std::max(1, static_cast<int>(std::round(mob.attackDamage * (1.0f - mitigation))));
+          playerHealth.current = std::max(0, playerHealth.current - damageTaken);
           this->eventBus->emitDamageEvent(
-              DamageEvent{mobEntityId, this->playerEntityId, mob.attackDamage, playerCenter});
+              DamageEvent{mobEntityId, this->playerEntityId, damageTaken, playerCenter});
           this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
-              "-" + std::to_string(mob.attackDamage), playerCenter, FloatingTextKind::Damage});
+              "-" + std::to_string(damageTaken), playerCenter, FloatingTextKind::Damage});
           if (this->playerKnockbackImmunityRemaining <= 0.0f) {
             applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
                           PUSHBACK_DURATION);
@@ -914,6 +1003,7 @@ void Game::updateRegionAndQuestState() {
   SkillTreeComponent& skillTree =
       this->registry->getComponent<SkillTreeComponent>(this->playerEntityId);
   applyLevelUps(level, stats, skillTree);
+  refreshSecondaryStats(stats);
 }
 
 void Game::applyClassSelection(CharacterClass selectedClass) {
@@ -938,6 +1028,7 @@ void Game::applyClassSelection(CharacterClass selectedClass) {
   stats.dexterity = std::max(stats.dexterity, defaults.dexterity);
   stats.intellect = std::max(stats.intellect, defaults.intellect);
   stats.luck = std::max(stats.luck, defaults.luck);
+  refreshSecondaryStats(stats);
   health.max = std::max(health.max, defaults.health);
   health.current = health.max;
   mana.max = std::max(mana.max, defaults.mana);
@@ -1391,6 +1482,7 @@ Game::Game() {
     stats.dexterity = defaults.dexterity;
     stats.intellect = defaults.intellect;
     stats.luck = defaults.luck;
+    refreshSecondaryStats(stats);
     health.max = defaults.health;
     health.current = defaults.health;
     mana.max = defaults.mana;
