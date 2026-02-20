@@ -79,11 +79,12 @@ int spawnMob(Registry& registry, const Position& position, const Region& region,
   const int tileX = static_cast<int>(position.x / TILE_SIZE);
   const int tileY = static_cast<int>(position.y / TILE_SIZE);
   registry.registerComponentForEntity<MobComponent>(
-      std::make_unique<MobComponent>(archetype.type, resolved.level, tileX, tileY, region.x,
-                                     region.y, region.width, region.height, resolved.aggroRange,
-                                     resolved.leashRange, resolved.speed, resolved.experience,
-                                     resolved.attackDamage, resolved.attackCooldown,
-                                     resolved.attackRange),
+      std::make_unique<MobComponent>(
+          archetype.type, resolved.level, tileX, tileY, region.x, region.y, region.width,
+          region.height, resolved.aggroRange, resolved.leashRange, resolved.speed,
+          resolved.experience, resolved.attackDamage, resolved.attackCooldown, resolved.attackRange,
+          resolved.behavior, resolved.abilityType, resolved.preferredRange, resolved.abilityValue,
+          resolved.abilityCooldown),
       mobEntityId);
   mobEntityIds.push_back(mobEntityId);
   return mobEntityId;
@@ -116,7 +117,13 @@ void resetMob(Registry& registry, int entityId, const Position& position, const 
   mob.attackDamage = resolved.attackDamage;
   mob.attackCooldown = resolved.attackCooldown;
   mob.attackRange = resolved.attackRange;
+  mob.behavior = resolved.behavior;
+  mob.abilityType = resolved.abilityType;
+  mob.preferredRange = resolved.preferredRange;
+  mob.abilityValue = resolved.abilityValue;
+  mob.abilityCooldown = resolved.abilityCooldown;
   mob.attackTimer = 0.0f;
+  mob.abilityTimer = 0.0f;
   health.max = resolved.maxHealth;
   health.current = resolved.maxHealth;
 }

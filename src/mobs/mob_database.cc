@@ -313,6 +313,92 @@ MobDatabase::MobDatabase() {
        8,
        MobLootTable{10, EquipmentDropGenerationOptions{50, 50, 42, 38, 20}}},
   };
+
+  for (MobArchetype& archetype : this->archetypes) {
+    switch (archetype.type) {
+    case MobType::Goblin:
+    case MobType::GoblinArcher:
+    case MobType::GoblinBrute:
+      archetype.behavior = (archetype.type == MobType::GoblinBrute) ? MobBehaviorType::Bruiser
+                                                                    : MobBehaviorType::Melee;
+      if (archetype.type == MobType::GoblinArcher) {
+        archetype.behavior = MobBehaviorType::Ranged;
+      }
+      archetype.abilityType = MobAbilityType::GoblinRage;
+      archetype.preferredRange = (archetype.behavior == MobBehaviorType::Ranged) ? 78.0f : 0.0f;
+      archetype.abilityValue = 0.30f;
+      archetype.abilityCooldown = 7.0f;
+      break;
+    case MobType::Skeleton:
+    case MobType::SkeletonArcher:
+      archetype.behavior = (archetype.type == MobType::SkeletonArcher) ? MobBehaviorType::Ranged
+                                                                       : MobBehaviorType::Melee;
+      archetype.abilityType = MobAbilityType::UndeadDrain;
+      archetype.preferredRange = (archetype.behavior == MobBehaviorType::Ranged) ? 82.0f : 0.0f;
+      archetype.abilityValue = 0.22f;
+      archetype.abilityCooldown = 9.0f;
+      break;
+    case MobType::Necromancer:
+      archetype.behavior = MobBehaviorType::Caster;
+      archetype.abilityType = MobAbilityType::UndeadDrain;
+      archetype.preferredRange = 90.0f;
+      archetype.abilityValue = 0.30f;
+      archetype.abilityCooldown = 8.0f;
+      break;
+    case MobType::Wolf:
+    case MobType::DireWolf:
+      archetype.behavior = MobBehaviorType::Skirmisher;
+      archetype.abilityType = MobAbilityType::BeastPounce;
+      archetype.preferredRange = 54.0f;
+      archetype.abilityValue = 0.35f;
+      archetype.abilityCooldown = 8.5f;
+      break;
+    case MobType::Bandit:
+    case MobType::BanditBruiser:
+      archetype.behavior = (archetype.type == MobType::BanditBruiser) ? MobBehaviorType::Bruiser
+                                                                      : MobBehaviorType::Melee;
+      archetype.abilityType = MobAbilityType::BanditTrick;
+      archetype.preferredRange = 0.0f;
+      archetype.abilityValue = 0.35f;
+      archetype.abilityCooldown = 7.5f;
+      break;
+    case MobType::BanditArcher:
+      archetype.behavior = MobBehaviorType::Ranged;
+      archetype.abilityType = MobAbilityType::BanditTrick;
+      archetype.preferredRange = 84.0f;
+      archetype.abilityValue = 0.32f;
+      archetype.abilityCooldown = 7.0f;
+      break;
+    case MobType::Slime:
+      archetype.behavior = MobBehaviorType::Bruiser;
+      archetype.abilityType = MobAbilityType::ArcaneSurge;
+      archetype.preferredRange = 0.0f;
+      archetype.abilityValue = 0.22f;
+      archetype.abilityCooldown = 10.0f;
+      break;
+    case MobType::ArcaneWisp:
+      archetype.behavior = MobBehaviorType::Skirmisher;
+      archetype.abilityType = MobAbilityType::ArcaneSurge;
+      archetype.preferredRange = 90.0f;
+      archetype.abilityValue = 0.38f;
+      archetype.abilityCooldown = 7.5f;
+      break;
+    case MobType::ArcaneSentinel:
+      archetype.behavior = MobBehaviorType::Caster;
+      archetype.abilityType = MobAbilityType::ArcaneSurge;
+      archetype.preferredRange = 86.0f;
+      archetype.abilityValue = 0.45f;
+      archetype.abilityCooldown = 8.0f;
+      break;
+    case MobType::Ogre:
+      archetype.behavior = MobBehaviorType::Bruiser;
+      archetype.abilityType = MobAbilityType::BeastPounce;
+      archetype.preferredRange = 0.0f;
+      archetype.abilityValue = 0.40f;
+      archetype.abilityCooldown = 8.0f;
+      break;
+    }
+  }
 }
 
 const MobArchetype* MobDatabase::get(MobType type) const {
@@ -372,6 +458,12 @@ MobResolvedStats MobDatabase::resolveStats(MobType type, int level) const {
   resolved.speed = archetype->speed;
   resolved.aggroRange = archetype->aggroRange;
   resolved.leashRange = archetype->leashRange;
+  resolved.behavior = archetype->behavior;
+  resolved.abilityType = archetype->abilityType;
+  resolved.preferredRange =
+      (archetype->preferredRange > 0.0f) ? archetype->preferredRange : archetype->attackRange;
+  resolved.abilityValue = archetype->abilityValue;
+  resolved.abilityCooldown = archetype->abilityCooldown;
   return resolved;
 }
 

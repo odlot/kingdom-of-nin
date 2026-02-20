@@ -382,42 +382,43 @@ float playerCritMultiplier(const StatsComponent& stats) {
 
 float mobEvasionChance(const MobComponent& mob) {
   float base = 0.02f;
-  switch (mob.type) {
-  case MobType::Goblin:
-  case MobType::Skeleton:
-  case MobType::Bandit:
+  switch (mob.behavior) {
+  case MobBehaviorType::Melee:
     base = 0.03f;
     break;
-  case MobType::GoblinArcher:
-  case MobType::SkeletonArcher:
-  case MobType::BanditArcher:
-  case MobType::ArcaneWisp:
-    base = 0.06f;
+  case MobBehaviorType::Ranged:
+    base = 0.055f;
     break;
-  case MobType::GoblinBrute:
-  case MobType::BanditBruiser:
-  case MobType::Ogre:
+  case MobBehaviorType::Caster:
+    base = 0.045f;
+    break;
+  case MobBehaviorType::Bruiser:
     base = 0.015f;
     break;
-  case MobType::Wolf:
-  case MobType::DireWolf:
-    base = 0.05f;
-    break;
-  case MobType::Necromancer:
-  case MobType::ArcaneSentinel:
-    base = 0.04f;
-    break;
-  case MobType::Slime:
-    base = 0.01f;
+  case MobBehaviorType::Skirmisher:
+    base = 0.06f;
     break;
   }
-  return std::clamp(base + (0.002f * static_cast<float>(mob.level)), 0.01f, 0.25f);
+  return std::clamp(base + (0.0018f * static_cast<float>(mob.level)), 0.01f, 0.25f);
 }
 
 float squaredDistance(const Position& a, const Position& b) {
   const float dx = a.x - b.x;
   const float dy = a.y - b.y;
   return (dx * dx) + (dy * dy);
+}
+
+Position retreatTarget(const Position& mobCenter, const Position& playerCenter, float currentX,
+                       float currentY) {
+  float dx = mobCenter.x - playerCenter.x;
+  float dy = mobCenter.y - playerCenter.y;
+  const float length = std::sqrt((dx * dx) + (dy * dy));
+  if (length <= 0.001f) {
+    return Position(currentX, currentY);
+  }
+  dx /= length;
+  dy /= length;
+  return Position(currentX + (dx * TILE_SIZE * 2.0f), currentY + (dy * TILE_SIZE * 2.0f));
 }
 
 bool isInFacingArc(const Position& origin, const Position& target, float facingX, float facingY,
@@ -944,7 +945,7 @@ void Game::updateMobBehavior(float dt) {
   const int playerTileY = static_cast<int>(playerCenter.y / TILE_SIZE);
 
   for (int mobEntityId : this->mobEntityIds) {
-    const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
+    HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
     if (mobHealth.current <= 0) {
       continue;
     }
@@ -970,18 +971,44 @@ void Game::updateMobBehavior(float dt) {
                               homePosition.y + (mobCollision.height / 2.0f));
     const float distToHome = squaredDistance(mobCenter, homeCenter);
 
+    const bool pursuingPlayer =
+        playerAlive && playerInRegion && distToPlayer <= (mob.aggroRange * mob.aggroRange);
     std::optional<Position> target;
-    if (playerAlive && playerInRegion && distToPlayer <= (mob.aggroRange * mob.aggroRange)) {
-      target = playerTransform.position;
+    if (pursuingPlayer) {
+      const float preferredRange = std::max(16.0f, mob.preferredRange);
+      const float preferredRangeSquared = preferredRange * preferredRange;
+      const float retreatRangeSquared = (preferredRange * 0.65f) * (preferredRange * 0.65f);
+      switch (mob.behavior) {
+      case MobBehaviorType::Ranged:
+      case MobBehaviorType::Caster:
+      case MobBehaviorType::Skirmisher:
+        if (distToPlayer < retreatRangeSquared) {
+          target = retreatTarget(mobCenter, playerCenter, mobTransform.position.x,
+                                 mobTransform.position.y);
+        } else if (distToPlayer > preferredRangeSquared) {
+          target = playerTransform.position;
+        }
+        break;
+      case MobBehaviorType::Melee:
+      case MobBehaviorType::Bruiser:
+        target = playerTransform.position;
+        break;
+      }
     } else if (distToHome > 4.0f) {
       target = homePosition;
     }
 
     if (target.has_value()) {
-      moveEntityToward(*this->map, mobTransform, mobCollision, mob.speed, *target, dt);
+      float movementSpeed = mob.speed;
+      if (pursuingPlayer && mob.behavior == MobBehaviorType::Bruiser &&
+          distToPlayer > (mob.attackRange * mob.attackRange)) {
+        movementSpeed *= 1.08f;
+      }
+      moveEntityToward(*this->map, mobTransform, mobCollision, movementSpeed, *target, dt);
     }
 
     mob.attackTimer = std::max(0.0f, mob.attackTimer - dt);
+    mob.abilityTimer = std::max(0.0f, mob.abilityTimer - dt);
     if (mob.attackTimer <= 0.0f) {
       const float attackRangeSquared = mob.attackRange * mob.attackRange;
       if (playerAlive && squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
@@ -1014,19 +1041,82 @@ void Game::updateMobBehavior(float dt) {
             continue;
           }
 
+          int rawDamage = mob.attackDamage;
+          float mitigationMultiplier = 1.0f;
+          float knockbackMultiplier = 1.0f;
+          int healOnHit = 0;
+          const char* abilityLabel = nullptr;
+          if (mob.abilityTimer <= 0.0f) {
+            switch (mob.abilityType) {
+            case MobAbilityType::GoblinRage:
+              if ((mobHealth.current * 10) <= (mobHealth.max * 6)) {
+                rawDamage = std::max(
+                    1, static_cast<int>(std::round(rawDamage * (1.0f + mob.abilityValue))));
+                abilityLabel = "Rage";
+                mob.abilityTimer = mob.abilityCooldown;
+              }
+              break;
+            case MobAbilityType::UndeadDrain:
+              healOnHit = std::max(
+                  1, static_cast<int>(std::round(rawDamage * std::max(0.12f, mob.abilityValue))));
+              abilityLabel = "Drain";
+              mob.abilityTimer = mob.abilityCooldown;
+              break;
+            case MobAbilityType::BeastPounce:
+              if (distToPlayer > (mob.attackRange * mob.attackRange * 1.2f)) {
+                rawDamage = std::max(
+                    1, static_cast<int>(std::round(rawDamage * (1.0f + mob.abilityValue))));
+                knockbackMultiplier = 1.5f;
+                abilityLabel = "Pounce";
+                mob.abilityTimer = mob.abilityCooldown;
+              }
+              break;
+            case MobAbilityType::BanditTrick:
+              if (chanceRoll(this->rng) <= mob.abilityValue) {
+                rawDamage = std::max(
+                    1, static_cast<int>(std::round(rawDamage * (1.0f + mob.abilityValue))));
+                abilityLabel = "Trick";
+                mob.abilityTimer = mob.abilityCooldown;
+              }
+              break;
+            case MobAbilityType::ArcaneSurge:
+              mitigationMultiplier = std::clamp(1.0f - mob.abilityValue, 0.35f, 1.0f);
+              rawDamage += std::max(1, mob.level / 5);
+              abilityLabel = "Surge";
+              mob.abilityTimer = mob.abilityCooldown;
+              break;
+            case MobAbilityType::None:
+              break;
+            }
+          }
+
           const int armor = computeArmor(playerStats, playerEquipment, *this->itemDatabase);
-          const float mitigation = std::clamp(
-              static_cast<float>(armor) / (100.0f + static_cast<float>(armor)), 0.0f, 0.60f);
+          const float mitigation =
+              std::clamp(static_cast<float>(armor) / (100.0f + static_cast<float>(armor)), 0.0f,
+                         0.60f) *
+              mitigationMultiplier;
           const int damageTaken =
-              std::max(1, static_cast<int>(std::round(mob.attackDamage * (1.0f - mitigation))));
+              std::max(1, static_cast<int>(std::round(rawDamage * (1.0f - mitigation))));
           playerHealth.current = std::max(0, playerHealth.current - damageTaken);
           this->eventBus->emitDamageEvent(
               DamageEvent{mobEntityId, this->playerEntityId, damageTaken, playerCenter});
           this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
               "-" + std::to_string(damageTaken), playerCenter, FloatingTextKind::Damage});
+          if (abilityLabel) {
+            this->eventBus->emitFloatingTextEvent(
+                FloatingTextEvent{abilityLabel, mobCenter, FloatingTextKind::Info});
+          }
+          if (healOnHit > 0) {
+            const int healed = std::min(healOnHit, mobHealth.max - mobHealth.current);
+            if (healed > 0) {
+              mobHealth.current += healed;
+              this->eventBus->emitFloatingTextEvent(FloatingTextEvent{
+                  "+" + std::to_string(healed), mobCenter, FloatingTextKind::Heal});
+            }
+          }
           if (this->playerKnockbackImmunityRemaining <= 0.0f) {
-            applyPushback(*this->registry, this->playerEntityId, mobCenter, PUSHBACK_DISTANCE,
-                          PUSHBACK_DURATION);
+            applyPushback(*this->registry, this->playerEntityId, mobCenter,
+                          PUSHBACK_DISTANCE * knockbackMultiplier, PUSHBACK_DURATION);
             this->playerKnockbackImmunityRemaining = PLAYER_KNOCKBACK_IMMUNITY_SECONDS;
           }
           this->playerHitFlashTimer = 0.2f;

@@ -38,10 +38,14 @@ int main() {
     const MobResolvedStats level1 = database.resolveStats(MobType::Goblin, 1);
     const MobResolvedStats level10 = database.resolveStats(MobType::Goblin, 10);
     const MobResolvedStats levelOverCap = database.resolveStats(MobType::Goblin, 999);
+    const MobResolvedStats arcane = database.resolveStats(MobType::ArcaneSentinel, 45);
     expect(level10.maxHealth > level1.maxHealth, "mob health scales by level");
     expect(level10.experience > level1.experience, "mob experience scales by level");
     expect(level10.attackDamage >= level1.attackDamage, "mob damage scales by level");
     expect(levelOverCap.level == 60, "mob levels clamp to cap");
+    expect(arcane.behavior == MobBehaviorType::Caster, "arcane sentinel has caster behavior");
+    expect(arcane.abilityType == MobAbilityType::ArcaneSurge,
+           "arcane sentinel has arcane family ability");
   }
 
   {
