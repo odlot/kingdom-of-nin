@@ -21,3 +21,9 @@ target_link_libraries(item_database_generation_test PRIVATE items)
 target_include_directories(item_database_generation_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME item_database_generation_test COMMAND item_database_generation_test)
+
+add_executable(mob_database_test mob_database_test.cc)
+target_link_libraries(mob_database_test PRIVATE mobs items)
+target_include_directories(mob_database_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_test(NAME mob_database_test COMMAND mob_database_test)

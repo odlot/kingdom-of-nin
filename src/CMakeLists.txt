@@ -16,6 +16,7 @@ FetchContent_MakeAvailable(SDL_ttf)
 
 add_subdirectory(world)
 add_subdirectory(items)
+add_subdirectory(mobs)
 add_subdirectory(ecs)
 add_subdirectory(ui)
 add_subdirectory(events)
@@ -41,5 +42,5 @@ target_sources(game
       ${CMAKE_SOURCE_DIR}/include/gameplay/projectile_system.h
 )
 
-target_link_libraries(game PUBLIC SDL3_ttf::SDL3_ttf SDL3::SDL3 world ui items events skills quests
+target_link_libraries(game PUBLIC SDL3_ttf::SDL3_ttf SDL3::SDL3 world ui items mobs events skills quests
                            PRIVATE ecs spdlog::spdlog)

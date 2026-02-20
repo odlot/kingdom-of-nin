@@ -43,4 +43,4 @@ target_sources(ecs
       ${CMAKE_SOURCE_DIR}/include/ecs/component/graphic_component.h
 )
 target_include_directories(ecs PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(ecs PRIVATE SDL3::SDL3 spdlog::spdlog items)
+target_link_libraries(ecs PRIVATE SDL3::SDL3 spdlog::spdlog items mobs)

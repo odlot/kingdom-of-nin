@@ -15,6 +15,7 @@
 #include "ecs/system/respawn_system.h"
 #include "events/event_bus.h"
 #include "items/item_database.h"
+#include "mobs/mob_database.h"
 #include "quests/quest_database.h"
 #include "quests/quest_system.h"
 #include "skills/skill_database.h"
@@ -105,6 +106,7 @@ private:
   std::unique_ptr<QuestLog> questLogUi;
   std::unique_ptr<ShopPanel> shopPanel;
   std::unique_ptr<ItemDatabase> itemDatabase;
+  std::unique_ptr<MobDatabase> mobDatabase;
   std::unique_ptr<SkillDatabase> skillDatabase;
   std::unique_ptr<SkillTreeDefinition> skillTreeDefinition;
   std::unique_ptr<QuestDatabase> questDatabase;
@@ -160,5 +162,7 @@ private:
   float npcDialogScroll = 0.0f;
   float mouseWheelDelta = 0.0f;
   bool wasMousePressed = false;
+  unsigned int worldSeed = 0;
   std::mt19937 rng;
+  std::mt19937 lootRng;
 };

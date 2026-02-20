@@ -8,12 +8,13 @@
 
 #include "ecs/component/graphic_component.h"
 #include "ecs/registry.h"
+#include "mobs/mob_database.h"
 #include "world/map.h"
 #include "world/region.h"
 
 class RespawnSystem {
 public:
-  RespawnSystem();
+  RespawnSystem(const MobDatabase& mobDatabase, unsigned int seed);
   void initialize(const Map& map, Registry& registry, std::vector<int>& mobEntityIds);
   void update(float dt, const Map& map, Registry& registry, std::vector<int>& mobEntityIds);
   bool isSpawning(int entityId) const;
@@ -28,6 +29,7 @@ private:
 
   struct SpawnRegionState {
     Region region;
+    int mobLevel = 1;
     std::vector<SpawnSlot> slots;
   };
 
@@ -39,5 +41,6 @@ private:
 
   std::vector<SpawnRegionState> spawnRegions;
   std::unordered_map<int, SpawnAnimation> spawnAnimations;
+  const MobDatabase& mobDatabase;
   std::mt19937 rng;
 };
