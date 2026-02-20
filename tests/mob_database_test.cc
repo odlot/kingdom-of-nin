@@ -37,9 +37,23 @@ int main() {
   {
     const MobResolvedStats level1 = database.resolveStats(MobType::Goblin, 1);
     const MobResolvedStats level10 = database.resolveStats(MobType::Goblin, 10);
+    const MobResolvedStats levelOverCap = database.resolveStats(MobType::Goblin, 999);
     expect(level10.maxHealth > level1.maxHealth, "mob health scales by level");
     expect(level10.experience > level1.experience, "mob experience scales by level");
     expect(level10.attackDamage >= level1.attackDamage, "mob damage scales by level");
+    expect(levelOverCap.level == 60, "mob levels clamp to cap");
+  }
+
+  {
+    std::mt19937 rng(99);
+    for (int tier = 0; tier <= 11; ++tier) {
+      const int level = std::min(60, 1 + (tier * 5));
+      const MobArchetype& archetype = database.randomArchetypeForBand(tier, level, rng);
+      expect(level >= archetype.minSpawnLevel && level <= archetype.maxSpawnLevel,
+             "band roll returns archetype valid for level");
+      expect(tier >= archetype.minSpawnTier && tier <= archetype.maxSpawnTier,
+             "band roll returns archetype valid for tier");
+    }
   }
 
   {

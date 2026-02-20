@@ -27,6 +27,11 @@ struct MobArchetype {
   float speed = 60.0f;
   float aggroRange = 120.0f;
   float leashRange = 180.0f;
+  int minSpawnLevel = 1;
+  int maxSpawnLevel = 60;
+  int minSpawnTier = 0;
+  int maxSpawnTier = 11;
+  int spawnWeight = 10;
   MobLootTable lootTable;
 };
 
@@ -50,6 +55,7 @@ public:
   const MobArchetype* get(MobType type) const;
   const std::vector<MobArchetype>& allArchetypes() const { return archetypes; }
   const MobArchetype& randomArchetype(std::mt19937& rng) const;
+  const MobArchetype& randomArchetypeForBand(int spawnTier, int level, std::mt19937& rng) const;
   MobResolvedStats resolveStats(MobType type, int level) const;
   bool rollEquipmentDrop(MobType type, std::mt19937& rng,
                          EquipmentDropGenerationOptions& outOptions) const;

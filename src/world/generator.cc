@@ -13,9 +13,18 @@ std::unique_ptr<Map> Generator::generate() {
   Coordinate startingPosition(startZoneX + startZoneSize / 2, startZoneY + startZoneSize / 2);
   regions.emplace_back(RegionType::StartingZone, startZoneX, startZoneY, startZoneSize,
                        startZoneSize);
-  regions.emplace_back(RegionType::SpawnRegion, 12, 12, 18, 18);
-  regions.emplace_back(RegionType::SpawnRegion, 90, 20, 22, 18);
-  regions.emplace_back(RegionType::SpawnRegion, 24, 88, 20, 24);
+  regions.emplace_back(RegionType::SpawnRegion, 12, 12, 16, 16, 1, 5, 0);
+  regions.emplace_back(RegionType::SpawnRegion, 34, 10, 16, 16, 6, 10, 1);
+  regions.emplace_back(RegionType::SpawnRegion, 56, 8, 16, 16, 11, 15, 2);
+  regions.emplace_back(RegionType::SpawnRegion, 84, 12, 18, 16, 16, 20, 3);
+  regions.emplace_back(RegionType::SpawnRegion, 102, 28, 18, 18, 21, 25, 4);
+  regions.emplace_back(RegionType::SpawnRegion, 102, 54, 18, 18, 26, 30, 5);
+  regions.emplace_back(RegionType::SpawnRegion, 96, 82, 20, 18, 31, 35, 6);
+  regions.emplace_back(RegionType::SpawnRegion, 74, 98, 18, 18, 36, 40, 7);
+  regions.emplace_back(RegionType::SpawnRegion, 48, 102, 18, 18, 41, 45, 8);
+  regions.emplace_back(RegionType::SpawnRegion, 24, 96, 18, 20, 46, 50, 9);
+  regions.emplace_back(RegionType::SpawnRegion, 10, 72, 18, 18, 51, 55, 10);
+  regions.emplace_back(RegionType::SpawnRegion, 8, 44, 18, 18, 56, 60, 11);
   regions.emplace_back(RegionType::GoblinCamp, 72, 72, 18, 18);
   regions.emplace_back(RegionType::DungeonEntrance, 20, 64, 1, 1);
   regions.emplace_back(RegionType::DungeonEntrance, 64, 20, 1, 1);
