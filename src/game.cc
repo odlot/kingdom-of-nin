@@ -282,10 +282,11 @@ int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& eq
     if (!def) {
       continue;
     }
-    strength += def->stats.strength;
-    dexterity += def->stats.dexterity;
-    intellect += def->stats.intellect;
-    luck += def->stats.luck;
+    const PrimaryStatBonuses& primary = primaryStatsForItem(*def);
+    strength += primary.strength;
+    dexterity += primary.dexterity;
+    intellect += primary.intellect;
+    luck += primary.luck;
   }
   int primaryStat = strength;
   switch (characterClass) {
@@ -316,7 +317,7 @@ int computeArmor(const StatsComponent& stats, const EquipmentComponent& equipmen
     if (!def) {
       continue;
     }
-    total += def->stats.armor;
+    total += armorForItem(*def);
   }
   return total;
 }
@@ -337,10 +338,11 @@ EffectivePrimaryStats computeEffectivePrimaryStats(const StatsComponent& stats,
     if (!def) {
       continue;
     }
-    effective.strength += def->stats.strength;
-    effective.dexterity += def->stats.dexterity;
-    effective.intellect += def->stats.intellect;
-    effective.luck += def->stats.luck;
+    const PrimaryStatBonuses& primary = primaryStatsForItem(*def);
+    effective.strength += primary.strength;
+    effective.dexterity += primary.dexterity;
+    effective.intellect += primary.intellect;
+    effective.luck += primary.luck;
   }
   return effective;
 }

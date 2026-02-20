@@ -70,23 +70,24 @@ std::string allowedClassesLabel(const ItemDef& def) {
 
 std::vector<std::string> buildTooltipLines(const ItemDef& def) {
   std::vector<std::string> lines;
+  const PrimaryStatBonuses& primary = primaryStatsForItem(def);
   lines.push_back(def.name);
   lines.push_back(std::string("Rarity: ") + itemRarityName(def.rarity));
   lines.push_back(std::string("Req L") + std::to_string(def.requiredLevel) + "  " +
                   allowedClassesLabel(def));
   lines.push_back(std::string("Slot: ") + itemSlotName(def.slot));
-  lines.push_back("Armor +" + std::to_string(def.stats.armor));
-  if (def.stats.strength > 0) {
-    lines.push_back("STR +" + std::to_string(def.stats.strength));
+  lines.push_back("Armor +" + std::to_string(armorForItem(def)));
+  if (primary.strength > 0) {
+    lines.push_back("STR +" + std::to_string(primary.strength));
   }
-  if (def.stats.dexterity > 0) {
-    lines.push_back("DEX +" + std::to_string(def.stats.dexterity));
+  if (primary.dexterity > 0) {
+    lines.push_back("DEX +" + std::to_string(primary.dexterity));
   }
-  if (def.stats.intellect > 0) {
-    lines.push_back("INT +" + std::to_string(def.stats.intellect));
+  if (primary.intellect > 0) {
+    lines.push_back("INT +" + std::to_string(primary.intellect));
   }
-  if (def.stats.luck > 0) {
-    lines.push_back("LUK +" + std::to_string(def.stats.luck));
+  if (primary.luck > 0) {
+    lines.push_back("LUK +" + std::to_string(primary.luck));
   }
   return lines;
 }
