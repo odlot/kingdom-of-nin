@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-and-release:
+    name: build-and-release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      INITIAL_VERSION: v0.1.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Determine next version
+        id: version
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          head_tag="$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)"
+          if [[ -n "${head_tag}" ]]; then
+            next_tag="${head_tag}"
+            create_tag="false"
+          else
+            latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+            if [[ -z "${latest_tag}" ]]; then
+              next_tag="${INITIAL_VERSION}"
+            else
+              if [[ ! "${latest_tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                echo "Latest tag '${latest_tag}' is not valid semver (vX.Y.Z)." >&2
+                exit 1
+              fi
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch="${BASH_REMATCH[3]}"
+              next_patch=$((patch + 1))
+              next_tag="v${major}.${minor}.${next_patch}"
+            fi
+            create_tag="true"
+          fi
+
+          echo "next_tag=${next_tag}" >> "${GITHUB_OUTPUT}"
+          echo "create_tag=${create_tag}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved release tag: ${next_tag}"
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxss-dev \
+            libxxf86vm-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libopencv-dev \
+            libfreetype6-dev \
+            libharfbuzz-dev \
+            libgl1-mesa-dev
+
+      - name: Configure and build
+        run: scripts/check-build.sh
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package Linux artifact
+        id: package
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.next_tag }}"
+          archive="kingdom_of_nin-${tag}-linux-x64.tar.gz"
+          checksum="${archive}.sha256"
+          rm -rf dist
+          mkdir -p dist
+          cp build/kingdom_of_nin dist/
+          cp -R build/assets dist/assets
+          tar -czf "${archive}" -C dist .
+          sha256sum "${archive}" > "${checksum}"
+          echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
+          echo "checksum=${checksum}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create and push release tag
+        if: steps.version.outputs.create_tag == 'true'
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.next_tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.next_tag }}"
+          archive="${{ steps.package.outputs.archive }}"
+          checksum="${{ steps.package.outputs.checksum }}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${archive}" "${checksum}" --clobber
+          else
+            gh release create "${tag}" "${archive}" "${checksum}" \
+              --title "${tag}" \
+              --generate-notes
+          fi
