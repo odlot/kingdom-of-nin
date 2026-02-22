@@ -93,6 +93,7 @@ private:
   void updateLootPickup(const InputState& input);
   void updateSkillBarAndBuffs(const InputState& input, float dt);
   void updateToggles(const InputState& input);
+  void cullExpiredLoot(float dt);
   void applyClassSelection(CharacterClass selectedClass);
   Position playerCenter() const;
 

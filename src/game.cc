@@ -60,6 +60,8 @@ constexpr float ATTACK_RANGE = 56.0f;
 constexpr float ATTACK_COOLDOWN_SECONDS = 0.3f;
 constexpr float AUTO_TARGET_RANGE_MULTIPLIER = 2.0f;
 constexpr float LOOT_PICKUP_RANGE = 40.0f;
+constexpr float LOOT_LABEL_RANGE = 100.0f;
+constexpr float LOOT_DESPAWN_SECONDS = 90.0f;
 constexpr float NPC_INTERACT_RANGE = 52.0f;
 constexpr int PLAYER_LEVEL_CAP = 60;
 constexpr float FACING_TURN_SPEED = 8.0f;
@@ -630,7 +632,7 @@ Position centerForEntity(const TransformComponent& transform, const CollisionCom
 void applyPushback(Registry& registry, int targetEntityId, const Position& fromPosition,
                    float distance, float duration);
 bool createLootEntity(Registry& registry, const ItemDatabase& database, const Position& position,
-                      int itemId, std::vector<int>& lootEntityIds);
+                      int itemId, std::vector<int>& lootEntityIds, bool allowDespawn = true);
 int createProjectileEntity(Registry& registry, const Position& position, float velocityX,
                            float velocityY, float range, int sourceEntityId, int targetEntityId,
                            int damage, bool isCrit, float radius, float trailLength,
@@ -1467,7 +1469,7 @@ void applyPushback(Registry& registry, int targetEntityId, const Position& fromP
 }
 
 bool createLootEntity(Registry& registry, const ItemDatabase& database, const Position& position,
-                      int itemId, std::vector<int>& lootEntityIds) {
+                      int itemId, std::vector<int>& lootEntityIds, bool allowDespawn) {
   const ItemDef* def = database.getItem(itemId);
   const SDL_Color lootColor = lootColorForItem(def);
   int entityId = registry.createEntity();
@@ -1477,8 +1479,9 @@ bool createLootEntity(Registry& registry, const ItemDatabase& database, const Po
       std::make_unique<GraphicComponent>(position, lootColor), entityId);
   registry.registerComponentForEntity<CollisionComponent>(
       std::make_unique<CollisionComponent>(32.0f, 32.0f, false), entityId);
-  registry.registerComponentForEntity<LootComponent>(std::make_unique<LootComponent>(itemId),
-                                                     entityId);
+  const float despawnSeconds = allowDespawn ? LOOT_DESPAWN_SECONDS : 0.0f;
+  registry.registerComponentForEntity<LootComponent>(
+      std::make_unique<LootComponent>(itemId, despawnSeconds), entityId);
   lootEntityIds.push_back(entityId);
   return true;
 }
@@ -1769,7 +1772,7 @@ Game::Game() {
       }
       Position lootPosition(tileX * TILE_SIZE, tileY * TILE_SIZE);
       createLootEntity(*this->registry, *this->itemDatabase, lootPosition, lootItems[lootIndex],
-                       this->lootEntityIds);
+                       this->lootEntityIds, false);
       lootIndex = (lootIndex + 1) % static_cast<int>(lootItems.size());
     }
   }
@@ -1828,6 +1831,7 @@ void Game::update(float dt) {
 
   updateSkillBarAndBuffs(input, dt);
   updateLootPickup(input);
+  cullExpiredLoot(dt);
   if (input.questLogJustPressed) {
     this->questLogVisible = !this->questLogVisible;
   }
@@ -1867,6 +1871,44 @@ void Game::update(float dt) {
   updateClassUnlockAndSelection(input);
   const Position currentPlayerCenter = playerCenter();
   this->camera->update(currentPlayerCenter);
+}
+
+void Game::cullExpiredLoot(float dt) {
+  if (dt <= 0.0f || this->lootEntityIds.empty()) {
+    return;
+  }
+
+  const Position playerCenter = this->playerCenter();
+  const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
+  for (std::size_t i = 0; i < this->lootEntityIds.size();) {
+    const int lootId = this->lootEntityIds[i];
+    LootComponent& loot = this->registry->getComponent<LootComponent>(lootId);
+    if (loot.despawnSeconds <= 0.0f) {
+      ++i;
+      continue;
+    }
+    loot.ageSeconds += dt;
+    if (loot.ageSeconds < loot.despawnSeconds) {
+      ++i;
+      continue;
+    }
+
+    const TransformComponent& lootTransform =
+        this->registry->getComponent<TransformComponent>(lootId);
+    const Position lootCenter(lootTransform.position.x + (TILE_SIZE / 2.0f),
+                              lootTransform.position.y + (TILE_SIZE / 2.0f));
+    if (squaredDistance(playerCenter, lootCenter) <= pickupRangeSquared) {
+      ++i;
+      continue;
+    }
+
+    GraphicComponent& graphic = this->registry->getComponent<GraphicComponent>(lootId);
+    graphic.color = SDL_Color({0, 0, 0, 0});
+    TransformComponent& transform = this->registry->getComponent<TransformComponent>(lootId);
+    transform.position = Position(-1000.0f, -1000.0f);
+    this->lootEntityIds.erase(this->lootEntityIds.begin() +
+                              static_cast<std::vector<int>::difference_type>(i));
+  }
 }
 
 void Game::render() {
@@ -2009,6 +2051,7 @@ void Game::render() {
     if (!this->isPlayerGhost) {
       const Position playerCenter = this->playerCenter();
       const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
+      const float labelRangeSquared = LOOT_LABEL_RANGE * LOOT_LABEL_RANGE;
       int closestLootId = -1;
       float closestDist = pickupRangeSquared;
       for (int lootId : this->lootEntityIds) {
@@ -2031,6 +2074,11 @@ void Game::render() {
         }
         const TransformComponent& lootTransform =
             this->registry->getComponent<TransformComponent>(lootId);
+        const Position lootCenter(lootTransform.position.x + (TILE_SIZE / 2.0f),
+                                  lootTransform.position.y + (TILE_SIZE / 2.0f));
+        if (squaredDistance(playerCenter, lootCenter) > labelRangeSquared) {
+          continue;
+        }
         const SDL_Color labelColor = lootColorForItem(def);
         const std::string label = def->name;
         SDL_Surface* surface =
