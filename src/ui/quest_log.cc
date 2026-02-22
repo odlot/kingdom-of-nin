@@ -21,18 +21,7 @@ SDL_FRect panelRect(int windowWidth, int windowHeight) {
 std::string objectiveText(const QuestObjectiveProgress& objective, const ItemDatabase& items) {
   switch (objective.def.type) {
   case QuestObjectiveType::KillMobType: {
-    std::string mobName = "Mob";
-    switch (objective.def.mobType) {
-    case MobType::Goblin:
-      mobName = "Goblin";
-      break;
-    case MobType::GoblinArcher:
-      mobName = "Goblin Archer";
-      break;
-    case MobType::GoblinBrute:
-      mobName = "Goblin Brute";
-      break;
-    }
+    const std::string mobName = mobTypeName(objective.def.mobType);
     return "Defeat " + mobName + " (" + std::to_string(objective.currentCount) + "/" +
            std::to_string(objective.def.requiredCount) + ")";
   }
