@@ -321,6 +321,56 @@ int computeAttackPower(const StatsComponent& stats, const EquipmentComponent& eq
   return stats.baseAttackPower + primaryStat;
 }
 
+int powerFromPrimaryStats(const PrimaryStatBonuses& stats, CharacterClass characterClass) {
+  switch (characterClass) {
+  case CharacterClass::Warrior:
+    return (stats.strength * 2) + stats.dexterity;
+  case CharacterClass::Archer:
+    return (stats.dexterity * 2) + stats.luck;
+  case CharacterClass::Mage:
+    return (stats.intellect * 2) + stats.luck;
+  case CharacterClass::Rogue:
+    return (stats.luck * 2) + stats.dexterity;
+  case CharacterClass::Any:
+    return std::max({stats.strength, stats.dexterity, stats.intellect, stats.luck});
+  }
+  return 0;
+}
+
+const char* powerLabel(CharacterClass characterClass) {
+  switch (characterClass) {
+  case CharacterClass::Mage:
+    return "Spell";
+  case CharacterClass::Any:
+    return "Power";
+  case CharacterClass::Warrior:
+  case CharacterClass::Archer:
+  case CharacterClass::Rogue:
+    return "Attack";
+  }
+  return "Power";
+}
+
+const char* itemSlotName(ItemSlot slot) {
+  switch (slot) {
+  case ItemSlot::Weapon:
+    return "Weapon";
+  case ItemSlot::Shield:
+    return "Shield";
+  case ItemSlot::Shoulders:
+    return "Shoulders";
+  case ItemSlot::Chest:
+    return "Chest";
+  case ItemSlot::Pants:
+    return "Pants";
+  case ItemSlot::Boots:
+    return "Boots";
+  case ItemSlot::Cape:
+    return "Cape";
+  }
+  return "Gear";
+}
+
 int computeArmor(const StatsComponent& stats, const EquipmentComponent& equipment,
                  const ItemDatabase& database) {
   int total = stats.baseArmor;
@@ -2050,6 +2100,12 @@ void Game::render() {
   { // Loot labels and pickup prompt
     if (!this->isPlayerGhost) {
       const Position playerCenter = this->playerCenter();
+      const EquipmentComponent& equipment =
+          this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+      const ClassComponent& playerClass =
+          this->registry->getComponent<ClassComponent>(this->playerEntityId);
+      const LevelComponent& playerLevel =
+          this->registry->getComponent<LevelComponent>(this->playerEntityId);
       const float pickupRangeSquared = LOOT_PICKUP_RANGE * LOOT_PICKUP_RANGE;
       const float labelRangeSquared = LOOT_LABEL_RANGE * LOOT_LABEL_RANGE;
       int closestLootId = -1;
@@ -2113,6 +2169,78 @@ void Game::render() {
           SDL_RenderTexture(this->renderer, promptTexture, nullptr, &promptRect);
           SDL_DestroySurface(promptSurface);
           SDL_DestroyTexture(promptTexture);
+
+          std::vector<std::pair<std::string, SDL_Color>> compareLines;
+          auto signedValue = [](int value) -> std::string {
+            return (value >= 0 ? "+" : "") + std::to_string(value);
+          };
+          auto deltaColor = [](int value) -> SDL_Color {
+            if (value > 0) {
+              return SDL_Color{120, 230, 140, 255};
+            }
+            if (value < 0) {
+              return SDL_Color{235, 120, 120, 255};
+            }
+            return SDL_Color{190, 190, 190, 255};
+          };
+          auto appendDeltaLine = [&](const char* label, int value) {
+            if (value != 0) {
+              compareLines.push_back(
+                  {std::string(label) + " " + signedValue(value), deltaColor(value)});
+            }
+          };
+
+          auto equippedIt = equipment.equipped.find(def->slot);
+          if (equippedIt == equipment.equipped.end()) {
+            compareLines.push_back({"Empty " + std::string(itemSlotName(def->slot)) + " slot",
+                                    SDL_Color{150, 210, 255, 255}});
+          } else {
+            const ItemDef* equippedDef = this->itemDatabase->getItem(equippedIt->second.itemId);
+            if (!equippedDef) {
+              compareLines.push_back({"No compare available", SDL_Color{190, 190, 190, 255}});
+            } else {
+              const PrimaryStatBonuses& newPrimary = primaryStatsForItem(*def);
+              const PrimaryStatBonuses& oldPrimary = primaryStatsForItem(*equippedDef);
+              const PrimaryStatBonuses deltaPrimary{newPrimary.strength - oldPrimary.strength,
+                                                    newPrimary.dexterity - oldPrimary.dexterity,
+                                                    newPrimary.intellect - oldPrimary.intellect,
+                                                    newPrimary.luck - oldPrimary.luck};
+              const int powerDelta =
+                  powerFromPrimaryStats(deltaPrimary, playerClass.characterClass);
+              const int armorDelta = armorForItem(*def) - armorForItem(*equippedDef);
+
+              appendDeltaLine(powerLabel(playerClass.characterClass), powerDelta);
+              appendDeltaLine("Armor", armorDelta);
+              appendDeltaLine("STR", deltaPrimary.strength);
+              appendDeltaLine("DEX", deltaPrimary.dexterity);
+              appendDeltaLine("INT", deltaPrimary.intellect);
+              appendDeltaLine("LUK", deltaPrimary.luck);
+              if (compareLines.empty()) {
+                compareLines.push_back({"No stat change", SDL_Color{190, 190, 190, 255}});
+              }
+            }
+          }
+          if (!meetsEquipRequirements(*def, playerLevel.level, playerClass.characterClass)) {
+            compareLines.push_back({"Cannot equip yet", SDL_Color{255, 200, 120, 255}});
+          }
+
+          float compareY = promptRect.y + promptRect.h + 4.0f;
+          for (const auto& line : compareLines) {
+            SDL_Surface* compareSurface = TTF_RenderText_Solid(this->font, line.first.c_str(),
+                                                               line.first.length(), line.second);
+            SDL_Texture* compareTexture =
+                SDL_CreateTextureFromSurface(this->renderer, compareSurface);
+            SDL_FRect compareRect = {promptRect.x, compareY, static_cast<float>(compareSurface->w),
+                                     static_cast<float>(compareSurface->h)};
+            SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 140);
+            SDL_FRect compareBg = {compareRect.x - 4.0f, compareRect.y - 2.0f, compareRect.w + 8.0f,
+                                   compareRect.h + 4.0f};
+            SDL_RenderFillRect(this->renderer, &compareBg);
+            SDL_RenderTexture(this->renderer, compareTexture, nullptr, &compareRect);
+            compareY += compareRect.h + 2.0f;
+            SDL_DestroySurface(compareSurface);
+            SDL_DestroyTexture(compareTexture);
+          }
         }
       }
     }
