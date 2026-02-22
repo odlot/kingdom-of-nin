@@ -1,6 +1,5 @@
 #include "ui/inventory.h"
 
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -17,6 +16,166 @@ constexpr float PANEL_WIDTH =
     (INVENTORY_COLS * SLOT_SIZE) + ((INVENTORY_COLS + 1) * SLOT_PADDING) + (PANEL_PADDING * 2.0f);
 constexpr float PANEL_HEIGHT = LIST_Y_OFFSET + (INVENTORY_ROWS * SLOT_SIZE) +
                                ((INVENTORY_ROWS + 1) * SLOT_PADDING) + PANEL_PADDING;
+
+SDL_Color rarityFrameColor(ItemRarity rarity) {
+  switch (rarity) {
+  case ItemRarity::Common:
+    return SDL_Color{170, 170, 170, 255};
+  case ItemRarity::Rare:
+    return SDL_Color{90, 150, 255, 255};
+  case ItemRarity::Epic:
+    return SDL_Color{210, 120, 255, 255};
+  }
+  return SDL_Color{170, 170, 170, 255};
+}
+
+SDL_Color slotBaseColor(ItemSlot slot) {
+  switch (slot) {
+  case ItemSlot::Weapon:
+    return SDL_Color{78, 56, 36, 255};
+  case ItemSlot::Shield:
+    return SDL_Color{58, 76, 102, 255};
+  case ItemSlot::Shoulders:
+    return SDL_Color{74, 70, 96, 255};
+  case ItemSlot::Chest:
+    return SDL_Color{88, 72, 62, 255};
+  case ItemSlot::Pants:
+    return SDL_Color{62, 74, 78, 255};
+  case ItemSlot::Boots:
+    return SDL_Color{70, 62, 56, 255};
+  case ItemSlot::Cape:
+    return SDL_Color{78, 58, 86, 255};
+  }
+  return SDL_Color{70, 70, 70, 255};
+}
+
+void drawGlyph(SDL_Renderer* renderer, const SDL_FRect& iconRect, ItemSlot slot,
+               WeaponType weaponType, SDL_Color color) {
+  SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+
+  switch (slot) {
+  case ItemSlot::Weapon: {
+    switch (weaponType) {
+    case WeaponType::Bow: {
+      SDL_RenderLine(renderer, iconRect.x + (iconRect.w * 0.28f), iconRect.y + 3.0f,
+                     iconRect.x + (iconRect.w * 0.28f), iconRect.y + iconRect.h - 3.0f);
+      SDL_RenderLine(renderer, iconRect.x + (iconRect.w * 0.70f), iconRect.y + 3.0f,
+                     iconRect.x + (iconRect.w * 0.70f), iconRect.y + iconRect.h - 3.0f);
+      SDL_RenderLine(renderer, iconRect.x + (iconRect.w * 0.28f), iconRect.y + (iconRect.h * 0.5f),
+                     iconRect.x + (iconRect.w * 0.70f), iconRect.y + (iconRect.h * 0.5f));
+      break;
+    }
+    case WeaponType::Wand: {
+      SDL_FRect staff = {iconRect.x + (iconRect.w * 0.45f), iconRect.y + 6.0f, 4.0f,
+                         iconRect.h - 12.0f};
+      SDL_RenderFillRect(renderer, &staff);
+      SDL_FRect orb = {iconRect.x + (iconRect.w * 0.39f), iconRect.y + 2.0f, 8.0f, 8.0f};
+      SDL_RenderFillRect(renderer, &orb);
+      break;
+    }
+    case WeaponType::Dagger: {
+      SDL_FRect blade = {iconRect.x + (iconRect.w * 0.42f), iconRect.y + 5.0f, 6.0f,
+                         iconRect.h * 0.46f};
+      SDL_FRect handle = {iconRect.x + (iconRect.w * 0.36f), iconRect.y + (iconRect.h * 0.56f),
+                          18.0f, 4.0f};
+      SDL_RenderFillRect(renderer, &blade);
+      SDL_RenderFillRect(renderer, &handle);
+      break;
+    }
+    default: {
+      SDL_FRect blade = {iconRect.x + (iconRect.w * 0.43f), iconRect.y + 4.0f, 5.0f,
+                         iconRect.h * 0.56f};
+      SDL_FRect guard = {iconRect.x + (iconRect.w * 0.30f), iconRect.y + (iconRect.h * 0.54f),
+                         16.0f, 4.0f};
+      SDL_FRect grip = {iconRect.x + (iconRect.w * 0.45f), iconRect.y + (iconRect.h * 0.64f), 3.0f,
+                        iconRect.h * 0.22f};
+      SDL_RenderFillRect(renderer, &blade);
+      SDL_RenderFillRect(renderer, &guard);
+      SDL_RenderFillRect(renderer, &grip);
+      break;
+    }
+    }
+    break;
+  }
+  case ItemSlot::Shield: {
+    SDL_FRect body = {iconRect.x + 6.0f, iconRect.y + 4.0f, iconRect.w - 12.0f, iconRect.h - 10.0f};
+    SDL_RenderFillRect(renderer, &body);
+    SDL_SetRenderDrawColor(renderer, 22, 24, 28, 255);
+    SDL_RenderLine(renderer, body.x + (body.w * 0.5f), body.y + 2.0f, body.x + (body.w * 0.5f),
+                   body.y + body.h - 2.0f);
+    SDL_RenderLine(renderer, body.x + 2.0f, body.y + (body.h * 0.5f), body.x + body.w - 2.0f,
+                   body.y + (body.h * 0.5f));
+    break;
+  }
+  case ItemSlot::Shoulders: {
+    SDL_FRect left = {iconRect.x + 4.0f, iconRect.y + 7.0f, 10.0f, 8.0f};
+    SDL_FRect right = {iconRect.x + iconRect.w - 14.0f, iconRect.y + 7.0f, 10.0f, 8.0f};
+    SDL_FRect neck = {iconRect.x + (iconRect.w * 0.42f), iconRect.y + 10.0f, 6.0f, 12.0f};
+    SDL_RenderFillRect(renderer, &left);
+    SDL_RenderFillRect(renderer, &right);
+    SDL_RenderFillRect(renderer, &neck);
+    break;
+  }
+  case ItemSlot::Chest: {
+    SDL_FRect torso = {iconRect.x + 7.0f, iconRect.y + 6.0f, iconRect.w - 14.0f,
+                       iconRect.h - 12.0f};
+    SDL_RenderFillRect(renderer, &torso);
+    break;
+  }
+  case ItemSlot::Pants: {
+    SDL_FRect left = {iconRect.x + 8.0f, iconRect.y + 6.0f, 8.0f, iconRect.h - 10.0f};
+    SDL_FRect right = {iconRect.x + iconRect.w - 16.0f, iconRect.y + 6.0f, 8.0f,
+                       iconRect.h - 10.0f};
+    SDL_RenderFillRect(renderer, &left);
+    SDL_RenderFillRect(renderer, &right);
+    break;
+  }
+  case ItemSlot::Boots: {
+    SDL_FRect left = {iconRect.x + 7.0f, iconRect.y + iconRect.h - 12.0f, 10.0f, 8.0f};
+    SDL_FRect right = {iconRect.x + iconRect.w - 17.0f, iconRect.y + iconRect.h - 12.0f, 10.0f,
+                       8.0f};
+    SDL_RenderFillRect(renderer, &left);
+    SDL_RenderFillRect(renderer, &right);
+    break;
+  }
+  case ItemSlot::Cape: {
+    SDL_FRect cape = {iconRect.x + 9.0f, iconRect.y + 5.0f, iconRect.w - 18.0f, iconRect.h - 8.0f};
+    SDL_RenderFillRect(renderer, &cape);
+    break;
+  }
+  }
+}
+
+void renderItemIcon(SDL_Renderer* renderer, const SDL_FRect& slotRect, const ItemDef& def,
+                    bool highlighted) {
+  const SDL_Color base = slotBaseColor(def.slot);
+  const SDL_Color frame = rarityFrameColor(def.rarity);
+  const SDL_Color iconColor =
+      highlighted ? SDL_Color{245, 245, 245, 255} : SDL_Color{230, 230, 230, 255};
+
+  SDL_SetRenderDrawColor(renderer, base.r, base.g, base.b, 255);
+  SDL_FRect inner = {slotRect.x + 3.0f, slotRect.y + 3.0f, slotRect.w - 6.0f, slotRect.h - 6.0f};
+  SDL_RenderFillRect(renderer, &inner);
+
+  SDL_SetRenderDrawColor(renderer, frame.r, frame.g, frame.b, 255);
+  SDL_FRect frameRect = {slotRect.x + 1.0f, slotRect.y + 1.0f, slotRect.w - 2.0f,
+                         slotRect.h - 2.0f};
+  SDL_RenderRect(renderer, &frameRect);
+
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 120);
+  SDL_FRect shadow = {inner.x + 1.0f, inner.y + 1.0f, inner.w, inner.h};
+  SDL_RenderRect(renderer, &shadow);
+
+  SDL_FRect glyphRect = {inner.x + 4.0f, inner.y + 4.0f, inner.w - 8.0f, inner.h - 8.0f};
+  drawGlyph(renderer, glyphRect, def.slot, def.weaponType, iconColor);
+}
+
+void renderEmptySlotHint(SDL_Renderer* renderer, const SDL_FRect& slotRect, ItemSlot slot) {
+  SDL_SetRenderDrawColor(renderer, 90, 90, 90, 150);
+  SDL_FRect iconRect = {slotRect.x + 8.0f, slotRect.y + 8.0f, slotRect.w - 16.0f,
+                        slotRect.h - 16.0f};
+  drawGlyph(renderer, iconRect, slot, WeaponType::None, SDL_Color{90, 90, 90, 150});
+}
 
 const char* itemSlotName(ItemSlot slot) {
   switch (slot) {
@@ -313,15 +472,9 @@ void Inventory::render(SDL_Renderer* renderer, TTF_Font* font, const InventoryCo
 
       if (i < inventory.items.size()) {
         const ItemDef* def = database.getItem(inventory.items[i].itemId);
-        const char* name = def ? def->name.c_str() : "Item";
-        SDL_Surface* lineSurface =
-            TTF_RenderText_Solid(font, name, static_cast<int>(std::strlen(name)), titleColor);
-        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(renderer, lineSurface);
-        SDL_FRect lineRect = {slot.x + 4.0f, slot.y + 4.0f, static_cast<float>(lineSurface->w),
-                              static_cast<float>(lineSurface->h)};
-        SDL_RenderTexture(renderer, lineTexture, nullptr, &lineRect);
-        SDL_DestroySurface(lineSurface);
-        SDL_DestroyTexture(lineTexture);
+        if (def) {
+          renderItemIcon(renderer, slot, *def, hoverIndex.has_value() && *hoverIndex == i);
+        }
       }
     }
   }
@@ -348,30 +501,14 @@ void Inventory::render(SDL_Renderer* renderer, TTF_Font* font, const InventoryCo
       SDL_SetRenderDrawColor(renderer, 80, 80, 80, 220);
       SDL_RenderRect(renderer, &box.rect);
 
-      const char* slotLabel = itemSlotName(box.slot);
-      SDL_Surface* labelSurface = TTF_RenderText_Solid(
-          font, slotLabel, static_cast<int>(std::strlen(slotLabel)), titleColor);
-      SDL_Texture* labelTexture = SDL_CreateTextureFromSurface(renderer, labelSurface);
-      SDL_FRect labelRect = {box.rect.x + 4.0f, box.rect.y + 2.0f,
-                             static_cast<float>(labelSurface->w),
-                             static_cast<float>(labelSurface->h)};
-      SDL_RenderTexture(renderer, labelTexture, nullptr, &labelRect);
-      SDL_DestroySurface(labelSurface);
-      SDL_DestroyTexture(labelTexture);
-
       auto it = equipment.equipped.find(box.slot);
       if (it != equipment.equipped.end()) {
         const ItemDef* def = database.getItem(it->second.itemId);
-        const char* name = def ? def->name.c_str() : "Item";
-        SDL_Surface* lineSurface =
-            TTF_RenderText_Solid(font, name, static_cast<int>(std::strlen(name)), titleColor);
-        SDL_Texture* lineTexture = SDL_CreateTextureFromSurface(renderer, lineSurface);
-        SDL_FRect lineRect = {box.rect.x + 4.0f, box.rect.y + 18.0f,
-                              static_cast<float>(lineSurface->w),
-                              static_cast<float>(lineSurface->h)};
-        SDL_RenderTexture(renderer, lineTexture, nullptr, &lineRect);
-        SDL_DestroySurface(lineSurface);
-        SDL_DestroyTexture(lineTexture);
+        if (def) {
+          renderItemIcon(renderer, box.rect, *def, hoverEquip && hoverEquip->slot == box.slot);
+        }
+      } else {
+        renderEmptySlotHint(renderer, box.rect, box.slot);
       }
     }
   }
