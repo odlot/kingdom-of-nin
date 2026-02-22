@@ -63,3 +63,13 @@ docker attach <CONTAINER_ID/NAME>
 ```bash
 codex login --device-auth
 ```
+
+## Releases
+
+- A GitHub Actions workflow (`.github/workflows/release.yml`) runs on every push to `main`.
+- It uses semantic version tags in `vX.Y.Z` format and auto-increments the patch number
+  (example: `v0.1.3` -> `v0.1.4`).
+- The workflow builds and tests the project, then publishes a GitHub Release with a Linux
+  build artifact and checksum.
+- If no prior semantic tag exists, it starts from `v0.1.0` (configurable in the workflow via
+  `INITIAL_VERSION`).
