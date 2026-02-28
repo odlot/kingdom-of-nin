@@ -344,6 +344,15 @@ MobDatabase::MobDatabase() {
       archetype.preferredRange = 90.0f;
       archetype.abilityValue = 0.30f;
       archetype.abilityCooldown = 8.0f;
+      archetype.baseMana = 56;
+      archetype.manaPerLevel = 4;
+      archetype.manaRegenPerSecond = 9.0f;
+      archetype.spellManaCost = 14;
+      archetype.spellPowerMultiplier = 1.25f;
+      archetype.spellProjectileSpeed = 190.0f;
+      archetype.spellProjectileRadius = 8.0f;
+      archetype.spellProjectileTrailLength = 24.0f;
+      archetype.spellProjectileColor = MobSpellColor{170, 130, 220, 255};
       break;
     case MobType::Wolf:
     case MobType::DireWolf:
@@ -389,6 +398,15 @@ MobDatabase::MobDatabase() {
       archetype.preferredRange = 86.0f;
       archetype.abilityValue = 0.45f;
       archetype.abilityCooldown = 8.0f;
+      archetype.baseMana = 72;
+      archetype.manaPerLevel = 5;
+      archetype.manaRegenPerSecond = 11.0f;
+      archetype.spellManaCost = 18;
+      archetype.spellPowerMultiplier = 1.35f;
+      archetype.spellProjectileSpeed = 210.0f;
+      archetype.spellProjectileRadius = 9.0f;
+      archetype.spellProjectileTrailLength = 28.0f;
+      archetype.spellProjectileColor = MobSpellColor{130, 182, 255, 255};
       break;
     case MobType::Ogre:
       archetype.behavior = MobBehaviorType::Bruiser;
@@ -464,6 +482,14 @@ MobResolvedStats MobDatabase::resolveStats(MobType type, int level) const {
       (archetype->preferredRange > 0.0f) ? archetype->preferredRange : archetype->attackRange;
   resolved.abilityValue = archetype->abilityValue;
   resolved.abilityCooldown = archetype->abilityCooldown;
+  resolved.maxMana = std::max(0, archetype->baseMana + (levelOffset * archetype->manaPerLevel));
+  resolved.manaRegenPerSecond = archetype->manaRegenPerSecond;
+  resolved.spellManaCost = static_cast<float>(std::max(0, archetype->spellManaCost));
+  resolved.spellPowerMultiplier = std::max(1.0f, archetype->spellPowerMultiplier);
+  resolved.spellProjectileSpeed = std::max(0.0f, archetype->spellProjectileSpeed);
+  resolved.spellProjectileRadius = std::max(0.0f, archetype->spellProjectileRadius);
+  resolved.spellProjectileTrailLength = std::max(0.0f, archetype->spellProjectileTrailLength);
+  resolved.spellProjectileColor = archetype->spellProjectileColor;
   return resolved;
 }
 

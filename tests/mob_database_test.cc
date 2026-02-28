@@ -46,6 +46,9 @@ int main() {
     expect(arcane.behavior == MobBehaviorType::Caster, "arcane sentinel has caster behavior");
     expect(arcane.abilityType == MobAbilityType::ArcaneSurge,
            "arcane sentinel has arcane family ability");
+    expect(arcane.maxMana > 0.0f, "arcane sentinel has mana pool");
+    expect(arcane.spellManaCost > 0.0f, "arcane sentinel spends mana to cast spells");
+    expect(arcane.spellProjectileSpeed > 0.0f, "arcane sentinel has projectile spell profile");
   }
 
   {

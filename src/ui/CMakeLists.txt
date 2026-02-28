@@ -14,6 +14,7 @@ target_sources(ui
     skill_bar.cc
     buff_bar.cc
     skill_tree.cc
+    mob_decoration_renderer.cc
   PUBLIC
     FILE_SET uiHeaders
     TYPE HEADERS
@@ -32,6 +33,8 @@ target_sources(ui
       ${CMAKE_SOURCE_DIR}/include/ui/skill_bar.h
       ${CMAKE_SOURCE_DIR}/include/ui/buff_bar.h
       ${CMAKE_SOURCE_DIR}/include/ui/skill_tree.h
+      ${CMAKE_SOURCE_DIR}/include/ui/mob_decoration_renderer.h
 )
 target_include_directories(ui PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(ui PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf world events items skills quests)
+target_link_libraries(ui PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf world events items skills quests
+                                 spdlog::spdlog ecs)

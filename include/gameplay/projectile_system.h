@@ -10,12 +10,11 @@
 #include "world/map.h"
 
 using ProjectileHitFn =
-    std::function<void(int mobEntityId, int damage, bool isCrit, const Position& hitPosition,
-                       const Position& fromPosition)>;
+    std::function<void(int sourceEntityId, int targetEntityId, int damage, bool isCrit,
+                       const Position& hitPosition, const Position& fromPosition)>;
 
 void updateProjectiles(float dt, Registry& registry, const Map& map, RespawnSystem& respawnSystem,
-                       std::vector<int>& projectileEntityIds, int playerEntityId,
-                       const ProjectileHitFn& onHit);
+                       std::vector<int>& projectileEntityIds, const ProjectileHitFn& onHit);
 
-void renderProjectiles(SDL_Renderer* renderer, const Position& cameraPosition,
-                       Registry& registry, const std::vector<int>& projectileEntityIds);
+void renderProjectiles(SDL_Renderer* renderer, const Position& cameraPosition, Registry& registry,
+                       const std::vector<int>& projectileEntityIds);

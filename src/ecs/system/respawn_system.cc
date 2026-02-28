@@ -86,6 +86,16 @@ int spawnMob(Registry& registry, const Position& position, const Region& region,
           resolved.behavior, resolved.abilityType, resolved.preferredRange, resolved.abilityValue,
           resolved.abilityCooldown),
       mobEntityId);
+  MobComponent& mob = registry.getComponent<MobComponent>(mobEntityId);
+  mob.maxMana = resolved.maxMana;
+  mob.currentMana = resolved.maxMana;
+  mob.manaRegenPerSecond = resolved.manaRegenPerSecond;
+  mob.spellManaCost = resolved.spellManaCost;
+  mob.spellPowerMultiplier = resolved.spellPowerMultiplier;
+  mob.spellProjectileSpeed = resolved.spellProjectileSpeed;
+  mob.spellProjectileRadius = resolved.spellProjectileRadius;
+  mob.spellProjectileTrailLength = resolved.spellProjectileTrailLength;
+  mob.spellProjectileColor = resolved.spellProjectileColor;
   mobEntityIds.push_back(mobEntityId);
   return mobEntityId;
 }
@@ -124,6 +134,15 @@ void resetMob(Registry& registry, int entityId, const Position& position, const 
   mob.abilityCooldown = resolved.abilityCooldown;
   mob.attackTimer = 0.0f;
   mob.abilityTimer = 0.0f;
+  mob.maxMana = resolved.maxMana;
+  mob.currentMana = resolved.maxMana;
+  mob.manaRegenPerSecond = resolved.manaRegenPerSecond;
+  mob.spellManaCost = resolved.spellManaCost;
+  mob.spellPowerMultiplier = resolved.spellPowerMultiplier;
+  mob.spellProjectileSpeed = resolved.spellProjectileSpeed;
+  mob.spellProjectileRadius = resolved.spellProjectileRadius;
+  mob.spellProjectileTrailLength = resolved.spellProjectileTrailLength;
+  mob.spellProjectileColor = resolved.spellProjectileColor;
   health.max = resolved.maxHealth;
   health.current = resolved.maxHealth;
 }
