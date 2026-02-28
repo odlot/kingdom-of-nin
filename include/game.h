@@ -25,6 +25,7 @@
 #include "ui/floating_text_system.h"
 #include "ui/inventory.h"
 #include "ui/minimap.h"
+#include "ui/mob_decoration_renderer.h"
 #include "ui/quest_log.h"
 #include "ui/shop_panel.h"
 #include "ui/skill_bar.h"
@@ -118,6 +119,7 @@ private:
   std::unique_ptr<SkillBar> skillBar;
   std::unique_ptr<BuffBar> buffBar;
   std::unique_ptr<SkillTree> skillTree;
+  std::unique_ptr<MobDecorationRenderer> mobDecorationRenderer;
   bool running = true;
   std::unique_ptr<Registry> registry;
   std::unique_ptr<Map> map;

@@ -21,21 +21,13 @@ float squaredDistance(const Position& a, const Position& b) {
 }
 } // namespace
 
-void updateProjectiles(float dt, Registry& registry, const Map& map,
-                       RespawnSystem& respawnSystem, std::vector<int>& projectileEntityIds,
-                       int playerEntityId, const ProjectileHitFn& onHit) {
-  const TransformComponent& playerTransform =
-      registry.getComponent<TransformComponent>(playerEntityId);
-  const CollisionComponent& playerCollision =
-      registry.getComponent<CollisionComponent>(playerEntityId);
-  const Position playerCenter = centerForEntity(playerTransform, playerCollision);
-
+void updateProjectiles(float dt, Registry& registry, const Map& map, RespawnSystem& respawnSystem,
+                       std::vector<int>& projectileEntityIds, const ProjectileHitFn& onHit) {
   for (std::size_t i = 0; i < projectileEntityIds.size();) {
     const int projectileId = projectileEntityIds[i];
     TransformComponent& projectileTransform =
         registry.getComponent<TransformComponent>(projectileId);
-    ProjectileComponent& projectile =
-        registry.getComponent<ProjectileComponent>(projectileId);
+    ProjectileComponent& projectile = registry.getComponent<ProjectileComponent>(projectileId);
     bool shouldRemove = false;
 
     projectile.lastX = projectileTransform.position.x;
@@ -54,21 +46,26 @@ void updateProjectiles(float dt, Registry& registry, const Map& map,
     }
 
     if (!shouldRemove && projectile.targetEntityId != -1) {
-      const HealthComponent& mobHealth =
+      const HealthComponent& targetHealth =
           registry.getComponent<HealthComponent>(projectile.targetEntityId);
-      if (mobHealth.current <= 0 || respawnSystem.isSpawning(projectile.targetEntityId)) {
+      if (targetHealth.current <= 0 || respawnSystem.isSpawning(projectile.targetEntityId)) {
         shouldRemove = true;
       } else {
-        const TransformComponent& mobTransform =
+        const TransformComponent& targetTransform =
             registry.getComponent<TransformComponent>(projectile.targetEntityId);
-        const CollisionComponent& mobCollision =
+        const CollisionComponent& targetCollision =
             registry.getComponent<CollisionComponent>(projectile.targetEntityId);
-        const Position mobCenter = centerForEntity(mobTransform, mobCollision);
-        const float radius = (mobCollision.width / 2.0f) + projectile.radius;
-        if (squaredDistance(projectileTransform.position, mobCenter) <= radius * radius) {
+        const Position targetCenter = centerForEntity(targetTransform, targetCollision);
+        const float radius = (targetCollision.width / 2.0f) + projectile.radius;
+        if (squaredDistance(projectileTransform.position, targetCenter) <= radius * radius) {
           if (onHit) {
-            onHit(projectile.targetEntityId, projectile.damage, projectile.isCrit, mobCenter,
-                  playerCenter);
+            const TransformComponent& sourceTransform =
+                registry.getComponent<TransformComponent>(projectile.sourceEntityId);
+            const CollisionComponent& sourceCollision =
+                registry.getComponent<CollisionComponent>(projectile.sourceEntityId);
+            const Position sourceCenter = centerForEntity(sourceTransform, sourceCollision);
+            onHit(projectile.sourceEntityId, projectile.targetEntityId, projectile.damage,
+                  projectile.isCrit, targetCenter, sourceCenter);
           }
           shouldRemove = true;
         }
@@ -93,11 +90,9 @@ void renderProjectiles(SDL_Renderer* renderer, const Position& cameraPosition, R
     const ProjectileComponent& projectile =
         registry.getComponent<ProjectileComponent>(projectileId);
     const float size = projectile.radius * 2.0f;
-    SDL_FRect projectileRect = {projectileTransform.position.x - projectile.radius -
-                                    cameraPosition.x,
-                                projectileTransform.position.y - projectile.radius -
-                                    cameraPosition.y,
-                                size, size};
+    SDL_FRect projectileRect = {
+        projectileTransform.position.x - projectile.radius - cameraPosition.x,
+        projectileTransform.position.y - projectile.radius - cameraPosition.y, size, size};
     SDL_SetRenderDrawColor(renderer, projectile.color.r, projectile.color.g, projectile.color.b,
                            projectile.color.a);
     SDL_RenderFillRect(renderer, &projectileRect);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "component.h"
+#include <cstdint>
 
 enum class MobType {
   Goblin,
@@ -23,6 +24,13 @@ enum class MobType {
 enum class MobBehaviorType { Melee, Ranged, Caster, Bruiser, Skirmisher };
 
 enum class MobAbilityType { None, GoblinRage, UndeadDrain, BeastPounce, BanditTrick, ArcaneSurge };
+
+struct MobSpellColor {
+  std::uint8_t r = 255;
+  std::uint8_t g = 255;
+  std::uint8_t b = 255;
+  std::uint8_t a = 255;
+};
 
 inline const char* mobTypeName(MobType type) {
   switch (type) {
@@ -97,4 +105,13 @@ public:
   float abilityValue;
   float abilityCooldown;
   float abilityTimer = 0.0f;
+  float maxMana = 0.0f;
+  float currentMana = 0.0f;
+  float manaRegenPerSecond = 0.0f;
+  float spellManaCost = 0.0f;
+  float spellPowerMultiplier = 1.0f;
+  float spellProjectileSpeed = 0.0f;
+  float spellProjectileRadius = 0.0f;
+  float spellProjectileTrailLength = 0.0f;
+  MobSpellColor spellProjectileColor = {};
 };

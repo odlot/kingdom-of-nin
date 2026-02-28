@@ -38,6 +38,15 @@ struct MobArchetype {
   float preferredRange = 0.0f;
   float abilityValue = 0.0f;
   float abilityCooldown = 8.0f;
+  int baseMana = 0;
+  int manaPerLevel = 0;
+  float manaRegenPerSecond = 0.0f;
+  int spellManaCost = 0;
+  float spellPowerMultiplier = 1.0f;
+  float spellProjectileSpeed = 0.0f;
+  float spellProjectileRadius = 0.0f;
+  float spellProjectileTrailLength = 0.0f;
+  MobSpellColor spellProjectileColor = {};
 };
 
 struct MobResolvedStats {
@@ -56,6 +65,14 @@ struct MobResolvedStats {
   float preferredRange = 0.0f;
   float abilityValue = 0.0f;
   float abilityCooldown = 8.0f;
+  float maxMana = 0.0f;
+  float manaRegenPerSecond = 0.0f;
+  float spellManaCost = 0.0f;
+  float spellPowerMultiplier = 1.0f;
+  float spellProjectileSpeed = 0.0f;
+  float spellProjectileRadius = 0.0f;
+  float spellProjectileTrailLength = 0.0f;
+  MobSpellColor spellProjectileColor = {};
 };
 
 class MobDatabase {

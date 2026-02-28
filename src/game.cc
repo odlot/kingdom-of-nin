@@ -30,6 +30,7 @@
 #include "ui/floating_text_system.h"
 #include "ui/inventory.h"
 #include "ui/minimap.h"
+#include "ui/mob_decoration_renderer.h"
 #include "ui/npc_dialog.h"
 #include "ui/quest_log.h"
 #include "ui/quest_marker_helpers.h"
@@ -916,12 +917,53 @@ void Game::updatePlayerAttack(float dt) {
     }
   };
 
-  updateProjectiles(dt, *this->registry, *this->map, *this->respawnSystem,
-                    this->projectileEntityIds, this->playerEntityId,
-                    [&](int mobId, int damage, bool isCrit, const Position& hitPosition,
-                        const Position& fromPosition) {
-                      applyPlayerDamageToMob(mobId, damage, isCrit, hitPosition, fromPosition);
-                    });
+  auto applyMobProjectileDamageToPlayer = [&](int sourceEntityId, int damage, bool isCrit,
+                                              const Position& hitPosition,
+                                              const Position& fromPosition) {
+    if (this->isPlayerGhost) {
+      return;
+    }
+    HealthComponent& playerHealth =
+        this->registry->getComponent<HealthComponent>(this->playerEntityId);
+    if (playerHealth.current <= 0) {
+      return;
+    }
+    const StatsComponent& playerStats =
+        this->registry->getComponent<StatsComponent>(this->playerEntityId);
+    const EquipmentComponent& playerEquipment =
+        this->registry->getComponent<EquipmentComponent>(this->playerEntityId);
+    const int armor = computeArmor(playerStats, playerEquipment, *this->itemDatabase);
+    const float mitigation =
+        std::clamp(static_cast<float>(armor) / (100.0f + static_cast<float>(armor)), 0.0f, 0.60f);
+    const int damageTaken =
+        std::max(1, static_cast<int>(std::round(static_cast<float>(damage) * (1.0f - mitigation))));
+    playerHealth.current = std::max(0, playerHealth.current - damageTaken);
+    this->eventBus->emitDamageEvent(
+        DamageEvent{sourceEntityId, this->playerEntityId, damageTaken, hitPosition});
+    this->eventBus->emitFloatingTextEvent(
+        FloatingTextEvent{"-" + std::to_string(damageTaken), hitPosition,
+                          isCrit ? FloatingTextKind::CritDamage : FloatingTextKind::Damage});
+    if (this->playerKnockbackImmunityRemaining <= 0.0f) {
+      applyPushback(*this->registry, this->playerEntityId, fromPosition, PUSHBACK_DISTANCE,
+                    PUSHBACK_DURATION);
+      this->playerKnockbackImmunityRemaining = PLAYER_KNOCKBACK_IMMUNITY_SECONDS;
+    }
+    this->playerHitFlashTimer = 0.2f;
+  };
+
+  updateProjectiles(
+      dt, *this->registry, *this->map, *this->respawnSystem, this->projectileEntityIds,
+      [&](int sourceEntityId, int targetEntityId, int damage, bool isCrit,
+          const Position& hitPosition, const Position& fromPosition) {
+        if (targetEntityId == this->playerEntityId && sourceEntityId != this->playerEntityId) {
+          applyMobProjectileDamageToPlayer(sourceEntityId, damage, isCrit, hitPosition,
+                                           fromPosition);
+          return;
+        }
+        if (sourceEntityId == this->playerEntityId) {
+          applyPlayerDamageToMob(targetEntityId, damage, isCrit, hitPosition, fromPosition);
+        }
+      });
 
   if (this->isPlayerGhost || this->attackCooldownRemaining > 0.0f) {
     return;
@@ -1059,11 +1101,47 @@ void Game::updateMobBehavior(float dt) {
       moveEntityToward(*this->map, mobTransform, mobCollision, movementSpeed, *target, dt);
     }
 
+    if (mob.maxMana > 0.0f && mob.manaRegenPerSecond > 0.0f) {
+      mob.currentMana =
+          std::clamp(mob.currentMana + (mob.manaRegenPerSecond * dt), 0.0f, mob.maxMana);
+    }
+
     mob.attackTimer = std::max(0.0f, mob.attackTimer - dt);
     mob.abilityTimer = std::max(0.0f, mob.abilityTimer - dt);
     if (mob.attackTimer <= 0.0f) {
       const float attackRangeSquared = mob.attackRange * mob.attackRange;
       if (playerAlive && squaredDistance(mobCenter, playerCenter) <= attackRangeSquared) {
+        const bool canCastProjectileSpell = mob.behavior == MobBehaviorType::Caster &&
+                                            mob.maxMana > 0.0f && mob.spellProjectileSpeed > 0.0f &&
+                                            mob.spellProjectileRadius > 0.0f &&
+                                            mob.currentMana >= mob.spellManaCost;
+        if (canCastProjectileSpell) {
+          float dx = playerCenter.x - mobCenter.x;
+          float dy = playerCenter.y - mobCenter.y;
+          const float length = std::sqrt((dx * dx) + (dy * dy));
+          if (length > 0.001f) {
+            dx /= length;
+            dy /= length;
+            const float spawnOffset =
+                (mobCollision.width / 2.0f) + mob.spellProjectileRadius + 4.0f;
+            const Position spawnPosition(mobCenter.x + (dx * spawnOffset),
+                                         mobCenter.y + (dy * spawnOffset));
+            const int spellDamage =
+                std::max(1, static_cast<int>(std::round(static_cast<float>(mob.attackDamage) *
+                                                        std::max(1.0f, mob.spellPowerMultiplier))));
+            createProjectileEntity(
+                *this->registry, spawnPosition, dx * mob.spellProjectileSpeed,
+                dy * mob.spellProjectileSpeed, mob.attackRange, mobEntityId, this->playerEntityId,
+                spellDamage, false, mob.spellProjectileRadius, mob.spellProjectileTrailLength,
+                SDL_Color{mob.spellProjectileColor.r, mob.spellProjectileColor.g,
+                          mob.spellProjectileColor.b, mob.spellProjectileColor.a},
+                this->projectileEntityIds);
+            mob.currentMana = std::max(0.0f, mob.currentMana - mob.spellManaCost);
+            mob.attackTimer = mob.attackCooldown;
+            continue;
+          }
+        }
+
         HealthComponent& playerHealth =
             this->registry->getComponent<HealthComponent>(this->playerEntityId);
         const LevelComponent& playerLevel =
@@ -1660,6 +1738,7 @@ Game::Game() {
   this->buffBar = std::make_unique<BuffBar>();
   this->skillTree = std::make_unique<SkillTree>();
   this->questLogUi = std::make_unique<QuestLog>();
+  this->mobDecorationRenderer = std::make_unique<MobDecorationRenderer>();
   if (!TTF_Init()) {
     logger->error("SDL TTF could not initialize! SDL_Error: {}", SDL_GetError());
     throw std::runtime_error("SDL TTF Initialization failed");
@@ -2330,66 +2409,11 @@ void Game::render() {
     SDL_RenderRect(this->renderer, &barBg);
   }
 
-  { // Mob HP bars
-    for (int mobEntityId : this->mobEntityIds) {
-      const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
-      if (mobHealth.max <= 0) {
-        continue;
-      }
-      if (this->respawnSystem->isSpawning(mobEntityId)) {
-        continue;
-      }
-      const TransformComponent& mobTransform =
-          this->registry->getComponent<TransformComponent>(mobEntityId);
-      const float healthRatio = std::clamp(
-          static_cast<float>(mobHealth.current) / static_cast<float>(mobHealth.max), 0.0f, 1.0f);
-      SDL_FRect barBg = {mobTransform.position.x - cameraPosition.x,
-                         mobTransform.position.y - cameraPosition.y - 8.0f,
-                         static_cast<float>(TILE_SIZE), 4.0f};
-      SDL_SetRenderDrawColor(this->renderer, 20, 20, 20, 220);
-      SDL_RenderFillRect(this->renderer, &barBg);
-
-      SDL_FRect barFill = barBg;
-      barFill.w = barBg.w * healthRatio;
-      SDL_SetRenderDrawColor(this->renderer, 200, 40, 40, 255);
-      SDL_RenderFillRect(this->renderer, &barFill);
-    }
-  }
-
-  { // Mob hover labels
-    for (int mobEntityId : this->mobEntityIds) {
-      const HealthComponent& mobHealth = this->registry->getComponent<HealthComponent>(mobEntityId);
-      if (mobHealth.current <= 0) {
-        continue;
-      }
-      if (this->respawnSystem->isSpawning(mobEntityId)) {
-        continue;
-      }
-      const TransformComponent& mobTransform =
-          this->registry->getComponent<TransformComponent>(mobEntityId);
-      const SDL_FRect mobRect = {mobTransform.position.x - cameraPosition.x,
-                                 mobTransform.position.y - cameraPosition.y,
-                                 static_cast<float>(TILE_SIZE), static_cast<float>(TILE_SIZE)};
-      if (mouseX < mobRect.x || mouseX > mobRect.x + mobRect.w || mouseY < mobRect.y ||
-          mouseY > mobRect.y + mobRect.h) {
-        continue;
-      }
-      const MobComponent& mob = this->registry->getComponent<MobComponent>(mobEntityId);
-      const char* label = mobTypeName(mob.type);
-      SDL_Color textColor = {245, 245, 245, 255};
-      SDL_Surface* surface = TTF_RenderText_Solid(this->font, label, std::strlen(label), textColor);
-      SDL_Texture* texture = SDL_CreateTextureFromSurface(this->renderer, surface);
-      SDL_FRect textRect = {mobRect.x, mobRect.y - 18.0f, static_cast<float>(surface->w),
-                            static_cast<float>(surface->h)};
-      SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(this->renderer, 0, 0, 0, 160);
-      SDL_FRect bgRect = {textRect.x - 4.0f, textRect.y - 2.0f, textRect.w + 8.0f,
-                          textRect.h + 4.0f};
-      SDL_RenderFillRect(this->renderer, &bgRect);
-      SDL_RenderTexture(this->renderer, texture, nullptr, &textRect);
-      SDL_DestroySurface(surface);
-      SDL_DestroyTexture(texture);
-      break;
+  { // Mob overlays
+    if (!this->isPlayerGhost) {
+      this->mobDecorationRenderer->render(this->renderer, this->font, *this->registry,
+                                          *this->respawnSystem, this->mobEntityIds,
+                                          this->playerCenter(), cameraPosition);
     }
   }
 
